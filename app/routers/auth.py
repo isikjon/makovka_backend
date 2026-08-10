@@ -1,0 +1,186 @@
+import uuid
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..config import Settings, get_settings
+from ..db import async_session_factory, get_db
+from ..deps import get_iiko_client
+from ..iiko.client import IikoClientError, IikoCloudClient, generate_card_number
+from ..models import IikoLink, OtpCode, RefreshToken, SyncStatus, User
+from ..schemas import (
+    OtpRequestIn,
+    OtpRequestOut,
+    OtpVerifyIn,
+    RefreshIn,
+    TokenPairOut,
+)
+from ..security import (
+    create_access_token,
+    generate_otp_code,
+    generate_refresh_token,
+    hash_otp_code,
+    hash_refresh_token,
+    verify_otp_code,
+)
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+_MAX_OTP_ATTEMPTS = 5
+
+
+@router.post("/otp/request", response_model=OtpRequestOut)
+async def request_otp(
+    body: OtpRequestIn,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    now = datetime.now(timezone.utc)
+    existing = await db.execute(
+        select(OtpCode)
+        .where(OtpCode.phone == body.phone, OtpCode.consumed_at.is_(None), OtpCode.expires_at > now)
+        .order_by(OtpCode.created_at.desc())
+    )
+    if existing.scalars().first() is not None:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Код уже отправлен, дождитесь окончания срока действия")
+
+    code = settings.otp_dev_code if settings.otp_mock_mode else generate_otp_code()
+    otp = OtpCode(
+        phone=body.phone,
+        code_hash=hash_otp_code(code),
+        expires_at=now + timedelta(minutes=settings.otp_ttl_minutes),
+    )
+    db.add(otp)
+    await db.commit()
+
+    if not settings.otp_mock_mode:
+        raise HTTPException(
+            status.HTTP_501_NOT_IMPLEMENTED,
+            "Реальная отправка SMS ещё не подключена",
+        )
+
+    return OtpRequestOut(
+        phone=body.phone,
+        expires_in_seconds=settings.otp_ttl_minutes * 60,
+        dev_code=code,
+    )
+
+
+@router.post("/otp/verify", response_model=TokenPairOut)
+async def verify_otp(
+    body: OtpVerifyIn,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    iiko: IikoCloudClient = Depends(get_iiko_client),
+):
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(OtpCode)
+        .where(OtpCode.phone == body.phone, OtpCode.consumed_at.is_(None), OtpCode.expires_at > now)
+        .order_by(OtpCode.created_at.desc())
+    )
+    otp = result.scalars().first()
+    if otp is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Код не найден или истёк, запросите новый")
+    if otp.attempts >= _MAX_OTP_ATTEMPTS:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Слишком много попыток, запросите новый код")
+    if not verify_otp_code(body.code, otp.code_hash):
+        otp.attempts += 1
+        await db.commit()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Неверный код")
+
+    otp.consumed_at = now
+    await db.commit()
+
+    result = await db.execute(select(User).where(User.phone == body.phone))
+    user = result.scalar_one_or_none()
+    is_new_user = user is None
+    if user is None:
+        user = User(phone=body.phone)
+        db.add(user)
+        await db.flush()
+        db.add(IikoLink(user_id=user.id, sync_status=SyncStatus.pending))
+        await db.commit()
+        background_tasks.add_task(_sync_user_with_iiko, user.id, iiko)
+
+    access_token = create_access_token(user.id)
+    refresh_token = generate_refresh_token()
+    db.add(
+        RefreshToken(
+            user_id=user.id,
+            token_hash=hash_refresh_token(refresh_token),
+            expires_at=now + timedelta(days=get_settings().refresh_token_ttl_days),
+        )
+    )
+    await db.commit()
+
+    return TokenPairOut(access_token=access_token, refresh_token=refresh_token, is_new_user=is_new_user)
+
+
+@router.post("/refresh", response_model=TokenPairOut)
+async def refresh(body: RefreshIn, db: AsyncSession = Depends(get_db)):
+    now = datetime.now(timezone.utc)
+    token_hash = hash_refresh_token(body.refresh_token)
+    result = await db.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
+    stored = result.scalar_one_or_none()
+    if stored is None or stored.revoked_at is not None or stored.expires_at <= now:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Недействительный refresh-токен")
+
+    stored.revoked_at = now
+    new_refresh = generate_refresh_token()
+    db.add(
+        RefreshToken(
+            user_id=stored.user_id,
+            token_hash=hash_refresh_token(new_refresh),
+            expires_at=now + timedelta(days=get_settings().refresh_token_ttl_days),
+        )
+    )
+    await db.commit()
+
+    return TokenPairOut(access_token=create_access_token(stored.user_id), refresh_token=new_refresh)
+
+
+async def _sync_user_with_iiko(user_id: uuid.UUID, iiko: IikoCloudClient) -> None:
+    async with async_session_factory() as db:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user is None:
+            return
+        result = await db.execute(select(IikoLink).where(IikoLink.user_id == user_id))
+        link = result.scalar_one_or_none()
+        if link is None:
+            link = IikoLink(user_id=user_id, sync_status=SyncStatus.pending)
+            db.add(link)
+
+        try:
+            existing = await iiko.find_guest_by_phone(user.phone, db=db)
+            if existing:
+                customer_id = existing.get("id") or existing.get("Id")
+                existing_cards = existing.get("cards") or existing.get("Cards") or []
+            else:
+                created = await iiko.create_or_update_guest(
+                    phone=user.phone, name=user.name, surname=user.surname, db=db
+                )
+                customer_id = created.get("id") or created.get("Id")
+                existing_cards = []
+
+            link.iiko_customer_id = customer_id
+
+            if existing_cards:
+                first_card = existing_cards[0]
+                link.card_number = first_card.get("track") or first_card.get("Track") or first_card.get("number")
+            else:
+                card_number = generate_card_number()
+                await iiko.add_card(customer_id=customer_id, card_number=card_number, phone=user.phone, db=db)
+                link.card_number = card_number
+
+            link.sync_status = SyncStatus.synced
+            link.last_error = None
+            link.linked_at = datetime.now(timezone.utc)
+        except IikoClientError as exc:
+            link.sync_status = SyncStatus.failed
+            link.last_error = str(exc)[:1000]
+
+        await db.commit()
