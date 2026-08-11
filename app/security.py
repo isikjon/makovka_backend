@@ -27,7 +27,7 @@ def verify_otp_code(code: str, code_hash: str) -> bool:
 
 
 def generate_otp_code() -> str:
-    return f"{secrets.randbelow(10000):04d}"
+    return f"{secrets.randbelow(1000000):06d}"
 
 
 def hash_refresh_token(token: str) -> str:

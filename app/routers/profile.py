@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, get_iiko_client
+from ..iiko.client import IikoCloudClient
+from ..iiko.sync import sync_user_with_iiko
 from ..models import IikoLink, User
 from ..schemas import IikoLinkOut, ProfileIn, ProfileOut
 
@@ -36,7 +38,11 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
 
 @router.put("", response_model=ProfileOut)
 async def update_profile(
-    body: ProfileIn, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    body: ProfileIn,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    iiko: IikoCloudClient = Depends(get_iiko_client),
 ):
     user.name = body.name
     user.surname = body.surname
@@ -45,4 +51,8 @@ async def update_profile(
     user.gender = body.gender
     user.promo_code = body.promo_code
     await db.commit()
+
+    if user.name.strip():
+        background_tasks.add_task(sync_user_with_iiko, user.id, iiko)
+
     return await _load_out(user, db)

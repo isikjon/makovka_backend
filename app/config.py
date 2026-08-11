@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     refresh_token_ttl_days: int = 30
 
     otp_mock_mode: bool = True
-    otp_dev_code: str = "0000"
+    otp_dev_code: str = "000000"
     otp_ttl_minutes: int = 5
 
     iiko_api_login: str = ""
