@@ -5,14 +5,17 @@ from fastapi import FastAPI
 from .config import get_settings
 from .iiko.client import IikoCloudClient
 from .routers import auth, profile
+from .sms.client import SmsProstoClient
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.iiko_client = IikoCloudClient(settings)
+    app.state.sms_client = SmsProstoClient(settings)
     yield
     await app.state.iiko_client.aclose()
+    await app.state.sms_client.aclose()
 
 
 app = FastAPI(title="Маковка API", version="0.1.0", lifespan=lifespan)

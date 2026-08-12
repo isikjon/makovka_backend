@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
 from ..db import get_db
+from ..deps import get_sms_client
 from ..models import IikoLink, OtpCode, RefreshToken, SyncStatus, User
 from ..schemas import (
     OtpRequestIn,
@@ -22,6 +23,7 @@ from ..security import (
     hash_refresh_token,
     verify_otp_code,
 )
+from ..sms.client import SmsProstoClient, SmsSendError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -33,6 +35,7 @@ async def request_otp(
     body: OtpRequestIn,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    sms: SmsProstoClient = Depends(get_sms_client),
 ):
     now = datetime.now(timezone.utc)
     existing = await db.execute(
@@ -44,6 +47,16 @@ async def request_otp(
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Код уже отправлен, дождитесь окончания срока действия")
 
     code = settings.otp_dev_code if settings.otp_mock_mode else generate_otp_code()
+
+    if not settings.otp_mock_mode:
+        try:
+            await sms.send_otp(body.phone, code)
+        except SmsSendError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"Не удалось отправить SMS: {exc}",
+            ) from exc
+
     otp = OtpCode(
         phone=body.phone,
         code_hash=hash_otp_code(code),
@@ -52,16 +65,10 @@ async def request_otp(
     db.add(otp)
     await db.commit()
 
-    if not settings.otp_mock_mode:
-        raise HTTPException(
-            status.HTTP_501_NOT_IMPLEMENTED,
-            "Реальная отправка SMS ещё не подключена",
-        )
-
     return OtpRequestOut(
         phone=body.phone,
         expires_in_seconds=settings.otp_ttl_minutes * 60,
-        dev_code=code,
+        dev_code=code if settings.otp_mock_mode else None,
     )
 
 
