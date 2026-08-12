@@ -7,7 +7,7 @@ from .db import get_db
 from .iiko.client import IikoCloudClient
 from .models import User
 from .security import decode_access_token
-from .sms.client import SmsProstoClient
+from .sms.client import SmsRuClient
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -16,7 +16,7 @@ def get_iiko_client(request: Request) -> IikoCloudClient:
     return request.app.state.iiko_client
 
 
-def get_sms_client(request: Request) -> SmsProstoClient:
+def get_sms_client(request: Request) -> SmsRuClient:
     return request.app.state.sms_client
 
 

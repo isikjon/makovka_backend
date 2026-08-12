@@ -23,7 +23,7 @@ from ..security import (
     hash_refresh_token,
     verify_otp_code,
 )
-from ..sms.client import SmsProstoClient, SmsSendError
+from ..sms.client import SmsRuClient, SmsSendError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -35,7 +35,7 @@ async def request_otp(
     body: OtpRequestIn,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    sms: SmsProstoClient = Depends(get_sms_client),
+    sms: SmsRuClient = Depends(get_sms_client),
 ):
     now = datetime.now(timezone.utc)
     existing = await db.execute(

@@ -24,8 +24,7 @@ class Settings(BaseSettings):
     iiko_test_guest_phone: str = ""
     iiko_mutations_enabled: bool = True
 
-    sms_prosto_api_key: str = ""
-    sms_prosto_sender_name: str = "BrandName"
+    sms_ru_api_id: str = ""
 
 
 @lru_cache

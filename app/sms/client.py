@@ -6,13 +6,13 @@ from ..config import Settings
 
 
 class SmsSendError(Exception):
-    def __init__(self, message: str, err_code: str | None = None):
+    def __init__(self, message: str, status_code: int | None = None):
         super().__init__(message)
-        self.err_code = err_code
+        self.status_code = status_code
 
 
-class SmsProstoClient:
-    _BASE_URL = "https://api.sms-prosto.ru"
+class SmsRuClient:
+    _BASE_URL = "https://sms.ru"
 
     def __init__(self, settings: Settings):
         self._settings = settings
@@ -24,21 +24,24 @@ class SmsProstoClient:
     async def send_otp(self, phone: str, code: str) -> None:
         text = f"Код для входа в Маковку: {code}"
         params = {
-            "method": "push_msg",
-            "key": self._settings.sms_prosto_api_key,
-            "phone": phone,
-            "text": text,
-            "sender_name": self._settings.sms_prosto_sender_name,
-            "format": "json",
+            "api_id": self._settings.sms_ru_api_id,
+            "to": phone,
+            "msg": text,
+            "json": 1,
         }
         try:
-            resp = await self._http.get("/", params=params)
+            resp = await self._http.get("/sms/send", params=params)
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPError as exc:
-            raise SmsSendError(f"sms-prosto request failed: {type(exc).__name__}") from exc
+            raise SmsSendError(f"sms.ru request failed: {type(exc).__name__}") from exc
 
-        msg = data.get("response", {}).get("msg", {})
-        err_code = msg.get("err_code")
-        if err_code != "0":
-            raise SmsSendError(msg.get("text", "unknown sms-prosto error"), err_code=err_code)
+        if data.get("status") != "OK":
+            raise SmsSendError(data.get("status_text", "unknown sms.ru error"))
+
+        result = data.get("sms", {}).get(phone, {})
+        if result.get("status") != "OK":
+            raise SmsSendError(
+                result.get("status_text", "unknown sms.ru delivery error"),
+                status_code=result.get("status_code"),
+            )
