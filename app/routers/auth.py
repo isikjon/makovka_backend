@@ -46,9 +46,15 @@ async def request_otp(
     if existing.scalars().first() is not None:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Код уже отправлен, дождитесь окончания срока действия")
 
-    code = settings.otp_dev_code if settings.otp_mock_mode else generate_otp_code()
+    is_review_bypass = bool(settings.review_bypass_phone) and body.phone == settings.review_bypass_phone
+    if is_review_bypass:
+        code = settings.review_bypass_code
+    elif settings.otp_mock_mode:
+        code = settings.otp_dev_code
+    else:
+        code = generate_otp_code()
 
-    if not settings.otp_mock_mode:
+    if not settings.otp_mock_mode and not is_review_bypass:
         try:
             await sms.send_otp(body.phone, code)
         except SmsSendError as exc:

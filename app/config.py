@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     sms_ru_api_id: str = ""
 
+    review_bypass_phone: str = ""
+    review_bypass_code: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
