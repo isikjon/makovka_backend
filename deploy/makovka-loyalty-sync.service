@@ -1,0 +1,20 @@
+[Unit]
+Description=Makovka loyalty sync with iikoCloud
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=makovka-api
+Group=makovka-api
+WorkingDirectory=/opt/makovka-api/app_src
+ExecStart=/opt/makovka-api/venv/bin/python -m app.jobs.loyalty_sync
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/makovka-api
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true

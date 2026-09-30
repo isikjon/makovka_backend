@@ -1,4 +1,6 @@
 import re
+from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
@@ -78,3 +80,52 @@ class ProfileOut(BaseModel):
     gender: str
     promo_code: str
     iiko: IikoLinkOut | None = None
+
+
+class TierOut(BaseModel):
+    code: str
+    name: str
+    min_spend: float
+    discount_percent: float
+    cashback_percent: float
+    perks: list[str]
+
+
+class CoffeeOut(BaseModel):
+    collected: int
+    goal: int
+
+
+class LoyaltyOut(BaseModel):
+    mode: Literal["flat", "tiers"]
+    sync_status: Literal["pending", "synced", "failed"] | None
+    card_number: str | None
+    current_tier: TierOut
+    next_tier: TierOut | None
+    total_spend: float
+    remaining_to_next: float | None
+    progress: float
+    bonus_balance: float
+    total_savings: float
+    coffee: CoffeeOut | None
+    tiers: list[TierOut]
+    updated_at: datetime | None
+    stale: bool
+
+
+class PurchaseOut(BaseModel):
+    id: str
+    ordered_at: datetime
+    order_number: int | None
+    order_sum: float
+    paid_sum: float
+    discount_sum: float
+    bonus_accrued: float
+    bonus_spent: float
+    bakery: str | None
+
+
+class PurchaseHistoryOut(BaseModel):
+    items: list[PurchaseOut]
+    total: int
+    updated_at: datetime | None

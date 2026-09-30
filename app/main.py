@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from .config import get_settings
 from .iiko.client import IikoCloudClient
-from .routers import auth, profile
+from .routers import auth, loyalty, profile
 from .sms.client import SmsRuClient
 
 
@@ -22,6 +22,7 @@ app = FastAPI(title="Маковка API", version="0.1.0", lifespan=lifespan)
 
 app.include_router(auth.router)
 app.include_router(profile.router)
+app.include_router(loyalty.router)
 
 
 @app.get("/health")

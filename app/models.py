@@ -1,8 +1,9 @@
 import enum
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Numeric, String, UniqueConstraint, func, text, true
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -96,3 +97,61 @@ class RefreshToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="refresh_tokens")
+
+
+class LoyaltyTier(Base):
+    __tablename__ = "loyalty_tiers"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    code: Mapped[str] = mapped_column(String(32), unique=True)
+    name: Mapped[str] = mapped_column(String(100))
+    min_spend: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    discount_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2))
+    cashback_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), server_default=text("0"))
+    perks: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    iiko_category_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sort_order: Mapped[int] = mapped_column(server_default=text("0"))
+    is_active: Mapped[bool] = mapped_column(server_default=true())
+
+
+class LoyaltyState(Base):
+    __tablename__ = "loyalty_states"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    total_spend: Mapped[Decimal] = mapped_column(Numeric(14, 2), server_default=text("0"))
+    bonus_balance: Mapped[Decimal] = mapped_column(Numeric(14, 2), server_default=text("0"))
+    total_savings: Mapped[Decimal] = mapped_column(Numeric(14, 2), server_default=text("0"))
+    coffee_collected: Mapped[int | None] = mapped_column(nullable=True)
+    tier_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    synced_category_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Purchase(Base):
+    __tablename__ = "purchases"
+    __table_args__ = (
+        UniqueConstraint("user_id", "pos_order_id", name="uq_purchases_user_pos_order"),
+        Index("ix_purchases_user_ordered_at", "user_id", "ordered_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    pos_order_id: Mapped[str] = mapped_column(String(64))
+    order_number: Mapped[int | None] = mapped_column(nullable=True)
+    ordered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    order_sum: Mapped[Decimal] = mapped_column(Numeric(14, 2), server_default=text("0"))
+    paid_sum: Mapped[Decimal] = mapped_column(Numeric(14, 2), server_default=text("0"))
+    discount_sum: Mapped[Decimal] = mapped_column(Numeric(14, 2), server_default=text("0"))
+    bonus_accrued: Mapped[Decimal] = mapped_column(Numeric(14, 2), server_default=text("0"))
+    bonus_spent: Mapped[Decimal] = mapped_column(Numeric(14, 2), server_default=text("0"))
+    terminal_group_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    bakery: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

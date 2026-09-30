@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import get_db
 from ..deps import get_current_user, get_iiko_client
 from ..iiko.client import IikoCloudClient
-from ..iiko.sync import sync_user_with_iiko
+from ..loyalty.service import link_user
 from ..models import IikoLink, User
 from ..schemas import IikoLinkOut, ProfileIn, ProfileOut
 
@@ -53,6 +53,6 @@ async def update_profile(
     await db.commit()
 
     if user.name.strip():
-        background_tasks.add_task(sync_user_with_iiko, user.id, iiko)
+        background_tasks.add_task(link_user, user.id, iiko)
 
     return await _load_out(user, db)

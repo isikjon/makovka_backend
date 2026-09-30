@@ -30,7 +30,20 @@ app/
   security.py             JWT + OTP hashing
   deps.py                   auth dependency
   iiko/client.py             iikoCloud API client
+  loyalty/rules.py            loyalty math and iiko payload parsing (pure functions)
+  loyalty/service.py           loyalty sync with iiko and response assembly
   routers/auth.py             OTP + token endpoints
   routers/profile.py           profile endpoint
+  routers/loyalty.py            loyalty status, purchase history, manual refresh
+  jobs/loyalty_sync.py           periodic tier sync (python -m app.jobs.loyalty_sync)
 alembic/                         migrations
+deploy/                          systemd unit + timer for the loyalty sync job
+tests/                           unit tests
+```
+
+## Tests
+
+```
+pip install -e ".[dev]"
+python -m pytest -q
 ```

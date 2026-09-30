@@ -19,6 +19,7 @@ async def sync_user_with_iiko(user_id: uuid.UUID, iiko: IikoCloudClient) -> None
         if link is None:
             link = IikoLink(user_id=user_id, sync_status=SyncStatus.pending)
             db.add(link)
+        await db.commit()
 
         try:
             existing = await iiko.find_guest_by_phone(user.phone, db=db)
