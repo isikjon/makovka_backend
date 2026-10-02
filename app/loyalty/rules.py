@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -10,6 +11,7 @@ _CENT = Decimal("0.01")
 _ZERO = Decimal("0.00")
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _CASH_REGISTER_SUFFIX = re.compile(r"\s*\(\s*касса[^)]*\)\s*$", re.IGNORECASE)
+_UUID_INPUT = re.compile(r"[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}")
 
 _CLOSE_ORDER = "CloseOrder"
 _DISCOUNT = "DiscountSum"
@@ -23,7 +25,16 @@ class SupportsMinSpend(Protocol):
     min_spend: Decimal
 
 
+class SupportsTierCode(SupportsMinSpend, Protocol):
+    code: str
+
+
 TierT = TypeVar("TierT", bound=SupportsMinSpend)
+
+
+def canonical_uuid(raw: str) -> str | None:
+    value = raw.strip()
+    return str(uuid.UUID(value)) if _UUID_INPUT.fullmatch(value) else None
 
 
 def to_money(value: Any) -> Decimal:
@@ -80,6 +91,18 @@ def resolve_tier(
     span = upcoming.min_spend - floor
     progress = float((spend - floor) / span) if span > 0 else 1.0
     return current, upcoming, upcoming.min_spend - spend, min(max(progress, 0.0), 1.0)
+
+
+def tier_spend_ranges(
+    tiers: Iterable[SupportsTierCode], codes: Iterable[str]
+) -> list[tuple[Decimal, Decimal | None]]:
+    ordered = sorted(tiers, key=lambda item: item.min_spend)
+    wanted = set(codes)
+    return [
+        (tier.min_spend, ordered[index + 1].min_spend if index + 1 < len(ordered) else None)
+        for index, tier in enumerate(ordered)
+        if tier.code in wanted
+    ]
 
 
 def bakery_name(terminal_group_name: str) -> str:
@@ -257,11 +280,11 @@ def pick_wallet(
 
 
 def resolve_bonus_wallet_id(
-    wallet_balances: Iterable[Any] | None, configured_id: str, coffee_wallet_id: str
+    wallet_balances: Iterable[Any] | None, configured_id: str, coffee_wallet_ids: Iterable[str]
 ) -> str | None:
     if configured_id:
         return configured_id
-    wallet = pick_wallet(wallet_balances, "", exclude_ids=(coffee_wallet_id,))
+    wallet = pick_wallet(wallet_balances, "", exclude_ids=coffee_wallet_ids)
     return str(wallet["id"]) if wallet and wallet.get("id") else None
 
 

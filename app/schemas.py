@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 _PHONE_RE = re.compile(r"^\+7\d{10}$")
 
@@ -129,3 +129,58 @@ class PurchaseHistoryOut(BaseModel):
     items: list[PurchaseOut]
     total: int
     updated_at: datetime | None
+
+
+class NoveltyOut(BaseModel):
+    id: str
+    title: str
+    image_url: str | None
+
+
+class PromotionOut(BaseModel):
+    id: str
+    kind: Literal["generic", "coffee_stamps", "referral", "happy_hours", "combo"]
+    title: str
+    subtitle: str | None
+    description: str | None
+    badge: str | None
+    price: float | None
+    old_price: float | None
+    time_text: str | None
+    image_url: str | None
+    show_on_home: bool
+    personal: bool
+    ends_at: datetime | None
+
+
+class BakeryOut(BaseModel):
+    id: str
+    name: str
+    address: str
+    metro: str | None
+    hours_text: str | None
+    latitude: float
+    longitude: float
+
+
+class ContentOut(BaseModel):
+    novelties: list[NoveltyOut]
+    promotions: list[PromotionOut]
+    bakeries: list[BakeryOut]
+
+
+class ReferralOut(BaseModel):
+    code: str
+    invited_count: int
+    rewarded_count: int
+    bonus_per_friend: float
+    rewards_enabled: bool
+    share_text: str
+
+
+class ReferralApplyIn(BaseModel):
+    code: str = Field(max_length=64)
+
+
+class ReferralApplyOut(BaseModel):
+    applied: bool

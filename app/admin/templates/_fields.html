@@ -1,0 +1,69 @@
+{% macro csrf(page) %}<input type="hidden" name="csrf_token" value="{{ page.csrf }}">{% endmacro %}
+
+{% macro error(errors, name) %}{% if errors.get(name) %}<span class="error">{{ errors[name] }}</span>{% endif %}{% endmacro %}
+
+{% macro form_error(errors) %}{% if errors.get("form") %}<div class="alert">{{ errors["form"] }}</div>{% endif %}{% endmacro %}
+
+{% macro input(name, label, data, errors, type="text", required=false, maxlength=none, step=none, hint=none, placeholder=none) %}
+<label class="field{% if errors.get(name) %} invalid{% endif %}">
+  <span class="label">{{ label }}{% if required %} <b>*</b>{% endif %}</span>
+  <input type="{{ type }}" name="{{ name }}" value="{{ data.get(name, '') }}"{% if required %} required{% endif %}{% if maxlength %} maxlength="{{ maxlength }}"{% endif %}{% if step %} step="{{ step }}"{% endif %}{% if placeholder %} placeholder="{{ placeholder }}"{% endif %}>
+  {% if hint %}<span class="hint">{{ hint }}</span>{% endif %}
+  {{ error(errors, name) }}
+</label>
+{% endmacro %}
+
+{% macro textarea(name, label, data, errors, rows=4, maxlength=none, hint=none) %}
+<label class="field{% if errors.get(name) %} invalid{% endif %}">
+  <span class="label">{{ label }}</span>
+  <textarea name="{{ name }}" rows="{{ rows }}"{% if maxlength %} maxlength="{{ maxlength }}"{% endif %}>{{ data.get(name, '') }}</textarea>
+  {% if hint %}<span class="hint">{{ hint }}</span>{% endif %}
+  {{ error(errors, name) }}
+</label>
+{% endmacro %}
+
+{% macro checkbox(name, label, data) %}
+<label class="check"><input type="checkbox" name="{{ name }}"{% if data.get(name) == "on" %} checked{% endif %}> {{ label }}</label>
+{% endmacro %}
+
+{% macro image(errors, image_url, max_upload_mb) %}
+<div class="field{% if errors.get('image') %} invalid{% endif %}">
+  <span class="label">Изображение</span>
+  {% if image_url %}
+  <img class="preview" src="{{ image_url }}" alt="Текущее изображение">
+  <label class="check"><input type="checkbox" name="remove_image"> Убрать изображение</label>
+  {% endif %}
+  <input type="file" name="image" accept="image/png,image/jpeg,image/webp">
+  <span class="hint">PNG, JPEG или WebP, не больше {{ max_upload_mb }} МБ. Новый файл заменит текущий.</span>
+  {{ error(errors, "image") }}
+</div>
+{% endmacro %}
+
+{% macro status(page, item) %}
+<form method="post" action="/admin/{{ page.section }}/{{ item.id }}/toggle" class="inline">
+  {{ csrf(page) }}
+  <button type="submit" class="badge {{ 'badge-on' if item.is_active else 'badge-off' }}" title="Переключить">{{ "Активно" if item.is_active else "Скрыто" }}</button>
+</form>
+{% endmacro %}
+
+{% macro move(page, item, first, last) %}
+<div class="move">
+  <form method="post" action="/admin/{{ page.section }}/{{ item.id }}/move">
+    {{ csrf(page) }}<input type="hidden" name="direction" value="up">
+    <button type="submit" class="icon" title="Выше"{% if first %} disabled{% endif %}>↑</button>
+  </form>
+  <form method="post" action="/admin/{{ page.section }}/{{ item.id }}/move">
+    {{ csrf(page) }}<input type="hidden" name="direction" value="down">
+    <button type="submit" class="icon" title="Ниже"{% if last %} disabled{% endif %}>↓</button>
+  </form>
+</div>
+{% endmacro %}
+
+{% macro delete(page, item) %}
+<form method="post" action="/admin/{{ page.section }}/{{ item.id }}/delete" class="card danger-zone">
+  {{ csrf(page) }}
+  <h2>Удаление</h2>
+  <label class="check"><input type="checkbox" name="confirm" required> Подтверждаю удаление без возможности восстановления</label>
+  <button type="submit" class="btn btn-danger">Удалить</button>
+</form>
+{% endmacro %}

@@ -22,7 +22,7 @@ class SmsRuClient:
         await self._http.aclose()
 
     async def send_otp(self, phone: str, code: str) -> None:
-        text = f"Код для входа в Маковку: {code}"
+        text = f"Код для входа в приложение Пекарня: {code}"
         params = {
             "api_id": self._settings.sms_ru_api_id,
             "to": phone,

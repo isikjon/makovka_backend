@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from app.iiko import sync as iiko_sync
-from app.iiko.client import IikoClientError
+from app.iiko.client import IikoClientError, IikoMutationBlocked
 from app.loyalty import service
 from app.models import IikoLink, LoyaltyState, LoyaltyTier, SyncStatus, User
 
@@ -139,6 +139,7 @@ class FakeIiko:
         categories: list[str] | None = None,
         transactions=None,
         fail_on: str | None = None,
+        blocked: bool = False,
     ):
         self.total_spend = Decimal(total_spend)
         self.customer = {
@@ -148,6 +149,7 @@ class FakeIiko:
         }
         self.transactions = transactions or (lambda date_from: [])
         self.fail_on = fail_on
+        self.blocked = blocked
         self.calls: list[tuple] = []
 
     async def _call(self, db, name: str, *args):
@@ -174,10 +176,16 @@ class FakeIiko:
         return self.transactions(date_from)
 
     async def add_customer_category(self, *, customer_id, category_id, guard_phone, db=None):
+        self._guard()
         await self._call(db, "add_category", category_id)
 
     async def remove_customer_category(self, *, customer_id, category_id, guard_phone, db=None):
+        self._guard()
         await self._call(db, "remove_category", category_id)
+
+    def _guard(self) -> None:
+        if self.blocked:
+            raise IikoMutationBlocked("iiko mutations disabled via kill switch")
 
     def names(self) -> list[str]:
         return [name for name, *_ in self.calls]
@@ -204,7 +212,12 @@ def _state() -> LoyaltyState:
 def sync_env(monkeypatch, make_settings):
     def setup(store: FakeStore, **settings_overrides) -> FakeSession:
         store.install(monkeypatch)
-        monkeypatch.setattr(service, "get_settings", lambda: make_settings(**settings_overrides))
+        settings = make_settings(**settings_overrides)
+
+        async def effective_settings():
+            return settings
+
+        monkeypatch.setattr(service, "get_effective_settings", effective_settings)
         return FakeSession(User(id=USER_ID, phone=TEST_GUEST_PHONE, name="Анна"))
 
     return setup
@@ -247,13 +260,57 @@ class TestTierCategorySync:
         assert state.tier_code == "gold"
         assert state.synced_category_id == "cat-gold"
 
-    async def test_disabled_tier_sync_leaves_categories_alone(self, sync_env):
+    @pytest.mark.parametrize("flags", [{"loyalty_tiers_enabled": True}, {"loyalty_tier_sync_enabled": True}, {}])
+    async def test_turning_tiers_or_sync_off_removes_applied_tier_categories(self, sync_env, flags):
         state = _state()
+        db = sync_env(FakeStore(_link(), state), **flags)
+        iiko = FakeIiko(total_spend="12000", categories=["cat-bonus-program", "cat-silver", "cat-gold"])
+        await service._sync(db, USER_ID, iiko)
+        assert [call for call in iiko.calls if "category" in call[0]] == [
+            ("remove_category", "cat-silver"),
+            ("remove_category", "cat-gold"),
+        ]
+        assert state.synced_category_id is None
+        assert state.last_error is None
+
+    async def test_sync_off_without_applied_category_touches_nothing(self, sync_env):
+        state = _state()
+        state.synced_category_id = None
         db = sync_env(FakeStore(_link(), state), loyalty_tiers_enabled=True)
-        iiko = FakeIiko(total_spend="1000", categories=["cat-silver"])
+        iiko = FakeIiko(total_spend="12000", categories=["cat-silver"])
+        await service._sync(db, USER_ID, iiko)
+        assert not [name for name in iiko.names() if "category" in name]
+        assert state.synced_category_id is None
+
+    async def test_changed_tier_category_replaces_the_old_one_add_first(self, sync_env):
+        tiers = [_tier("bronze", "0", None), _tier("silver", "5000", "cat-silver-new"), _tier("gold", "10000", "cat-gold")]
+        state = _state()
+        db = sync_env(FakeStore(_link(), state, tiers=tiers), **TIER_SYNC)
+        iiko = FakeIiko(total_spend="6000", categories=["cat-bonus-program", "CAT-SILVER"])
+        await service._sync(db, USER_ID, iiko)
+        assert [call for call in iiko.calls if "category" in call[0]] == [
+            ("add_category", "cat-silver-new"),
+            ("remove_category", "CAT-SILVER"),
+        ]
+        assert state.synced_category_id == "cat-silver-new"
+
+    async def test_retired_category_is_removed_once_tier_sync_is_off(self, sync_env):
+        state = _state()
+        db = sync_env(FakeStore(_link(), state, tiers=[_tier("bronze", "0", None)]))
+        iiko = FakeIiko(total_spend="6000", categories=["cat-silver", "cat-bonus-program"])
+        await service._sync(db, USER_ID, iiko)
+        assert [call for call in iiko.calls if "category" in call[0]] == [("remove_category", "cat-silver")]
+        assert state.synced_category_id is None
+
+    async def test_blocked_cleanup_keeps_the_applied_category_for_later(self, sync_env):
+        state = _state()
+        db = sync_env(FakeStore(_link(), state))
+        iiko = FakeIiko(total_spend="6000", categories=["cat-silver"], blocked=True)
         await service._sync(db, USER_ID, iiko)
         assert not [name for name in iiko.names() if "category" in name]
         assert state.synced_category_id == "cat-silver"
+        assert "kill switch" in state.last_error
+        assert db.in_transaction is False
 
     async def test_category_failure_is_recorded_after_snapshot(self, sync_env):
         state = _state()
@@ -287,6 +344,18 @@ class TestBonusWallet:
         assert purchase["discount_sum"] == Decimal("30.00")
         assert store.state.bonus_balance == Decimal("0.00")
         assert store.state.coffee_collected == 3
+
+    async def test_env_coffee_wallet_stays_excluded_when_override_is_cleared(self, sync_env, monkeypatch, make_settings):
+        store = FakeStore(_link(), _state())
+        db = sync_env(store, coffee_stamp_wallet_id="")
+        monkeypatch.setattr(service, "get_settings", lambda: make_settings(coffee_stamp_wallet_id="COFFEE-WALLET"))
+        wallets = [
+            {"id": "coffee-wallet", "type": 1, "balance": 3},
+            {"id": "bonus-2", "type": 1, "balance": 50},
+        ]
+        await service._sync(db, USER_ID, FakeIiko(wallets=wallets))
+        assert store.state.bonus_balance == Decimal("50.00")
+        assert store.state.coffee_collected is None
 
     async def test_type_fallback_skips_coffee_wallet(self, sync_env):
         store = FakeStore(_link(), _state())
@@ -484,3 +553,62 @@ class TestRunners:
         monkeypatch.setattr(service, "claim_sync", claim)
         await service.sync_user_loyalty(USER_ID, object())
         assert recorded == expected
+
+
+class TestReviewDemo:
+    async def test_demo_user_is_never_synced(self, sync_env):
+        db = sync_env(
+            FakeStore(_link(), _state()),
+            review_bypass_phone=TEST_GUEST_PHONE,
+            review_demo_card_number="7777000011112222",
+        )
+        iiko = FakeIiko(total_spend="9000")
+        await service._sync(db, USER_ID, iiko)
+        assert iiko.calls == []
+
+
+class TestReferralHook:
+    async def test_rewards_run_after_snapshot_with_effective_settings(self, sync_env, monkeypatch):
+        state = _state()
+        db = sync_env(
+            FakeStore(_link(), state),
+            loyalty_bonus_wallet_id="bonus-wallet",
+            referral_rewards_enabled=True,
+            referral_bonus_amount=300,
+        )
+        seen = []
+
+        async def process(session, iiko, user, settings):
+            assert not session.in_transaction
+            seen.append(
+                (user.id, settings.referral_rewards_enabled, settings.referral_bonus_amount, settings.loyalty_bonus_wallet_id)
+            )
+            assert state.synced_at > SYNCED_BEFORE
+
+        monkeypatch.setattr(service, "process_referral_reward", process)
+        await service._sync(db, USER_ID, FakeIiko(total_spend="1000"))
+        assert seen == [(USER_ID, True, 300.0, "bonus-wallet")]
+
+    async def test_rewards_never_get_a_guessed_wallet(self, sync_env, monkeypatch):
+        state = _state()
+        db = sync_env(FakeStore(_link(), state), referral_rewards_enabled=True, coffee_stamp_wallet_id="")
+        seen = []
+
+        async def process(session, iiko, user, settings):
+            seen.append(settings.loyalty_bonus_wallet_id)
+
+        monkeypatch.setattr(service, "process_referral_reward", process)
+        wallets = [{"id": "coffee-wallet", "type": 1, "balance": 3}, {"id": "bonus-2", "type": 1, "balance": 50}]
+        await service._sync(db, USER_ID, FakeIiko(wallets=wallets))
+        assert seen == [""]
+
+    async def test_rewards_are_skipped_when_iiko_read_fails(self, sync_env, monkeypatch):
+        db = sync_env(FakeStore(_link(), _state()), referral_rewards_enabled=True)
+        seen = []
+
+        async def process(*args):
+            seen.append(args)
+
+        monkeypatch.setattr(service, "process_referral_reward", process)
+        await service._sync(db, USER_ID, FakeIiko(fail_on="customer"))
+        assert seen == []

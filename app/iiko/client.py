@@ -124,14 +124,14 @@ class IikoCloudClient:
             self._token_expires_at = now + timedelta(minutes=50)
             return self._token
 
-    def _guard_mutation(self, payload: dict, guard_phone: str | None) -> None:
+    def guard_mutation(self, guard_phone: str | None, payload: dict | None = None) -> None:
         if not self._settings.iiko_mutations_enabled:
             raise IikoMutationBlocked("iiko mutations disabled via kill switch")
         if self._settings.iiko_env == "staging":
             test_phone = self._settings.iiko_test_guest_phone
             if not test_phone:
                 raise IikoMutationBlocked("staging environment has no test guest configured")
-            phones = {phone for phone in (guard_phone, _find_phone(payload)) if phone}
+            phones = {phone for phone in (guard_phone, _find_phone(payload or {})) if phone}
             if not phones:
                 raise IikoMutationBlocked("staging mutation has no guest phone to check")
             for phone in phones:
@@ -148,7 +148,7 @@ class IikoCloudClient:
         guard_phone: str | None = None,
     ) -> dict:
         if mutating:
-            self._guard_mutation(payload, guard_phone)
+            self.guard_mutation(guard_phone, payload)
 
         delays = iter(self._retry_delays)
         while True:
@@ -303,6 +303,27 @@ class IikoCloudClient:
             "categoryId": category_id,
         }
         return await self._post(db, endpoint, payload, mutating=True, guard_phone=guard_phone)
+
+    async def topup_wallet(
+        self,
+        *,
+        customer_id: str,
+        wallet_id: str,
+        amount: Decimal,
+        comment: str,
+        guard_phone: str,
+        db: AsyncSession | None = None,
+    ) -> dict:
+        payload = {
+            "organizationId": self._settings.iiko_organization_id,
+            "customerId": customer_id,
+            "walletId": wallet_id,
+            "sum": float(amount),
+            "comment": comment,
+        }
+        return await self._post(
+            db, "/api/1/loyalty/iiko/customer/wallet/topup", payload, mutating=True, guard_phone=guard_phone
+        )
 
     async def get_orders_sum_all_time(self, customer_id: str, db: AsyncSession | None = None) -> Decimal:
         payload = {

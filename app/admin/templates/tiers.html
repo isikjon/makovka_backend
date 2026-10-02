@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Уровни лояльности{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Уровни лояльности</h1>
+</div>
+<div class="note">
+  Уровни сейчас <b>{{ "включены" if tiers_enabled else "выключены" }}</b>{% if not tiers_enabled %} — гости видят единую скидку{% endif %}.
+  Синхронизация категорий в iiko <b>{{ "включена" if tier_sync_enabled else "выключена" }}</b>.
+  Переключается на странице <a href="/admin/settings">«Настройки»</a>.
+</div>
+<p></p>
+<table class="table">
+  <thead><tr><th>Уровень</th><th class="num">От суммы, ₽</th><th class="num">Скидка</th><th class="num">Кешбэк</th><th>Привилегии</th><th>Категория iiko</th><th>Статус</th></tr></thead>
+  <tbody>
+  {% for tier in tiers %}
+    <tr{% if not tier.is_active %} class="inactive"{% endif %}>
+      <td><a href="/admin/tiers/{{ tier.id }}">{{ tier.name }}</a><div class="hint">{{ tier.code }}</div></td>
+      <td class="num">{{ tier.min_spend|money }}</td>
+      <td class="num">{{ tier.discount_percent|percent }}</td>
+      <td class="num">{{ tier.cashback_percent|percent }}</td>
+      <td>{{ tier.perks|length }}</td>
+      <td class="hint">{{ tier.iiko_category_id or "—" }}</td>
+      <td><span class="badge {{ 'badge-on' if tier.is_active else 'badge-off' }}">{{ "Активен" if tier.is_active else "Выключен" }}</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

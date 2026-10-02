@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}Админка{% endblock %} · Пекарня</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+</head>
+<body>
+{% if page %}
+<header class="topbar">
+  <a class="brand" href="/admin/novelties">Пекарня</a>
+  <nav class="nav">
+    {% for slug, label in [("novelties", "Новинки"), ("promotions", "Акции"), ("bakeries", "Пекарни"), ("tiers", "Уровни лояльности"), ("settings", "Настройки"), ("guests", "Гости")] %}
+    <a href="/admin/{{ slug }}"{% if page.section == slug %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  <form method="post" action="/admin/logout" class="logout">
+    <input type="hidden" name="csrf_token" value="{{ page.csrf }}">
+    <span class="who">{{ page.admin.login }}</span>
+    <button type="submit" class="btn btn-ghost btn-small">Выйти</button>
+  </form>
+</header>
+{% endif %}
+<main class="container">
+  {% if message %}<div class="flash">{{ message }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

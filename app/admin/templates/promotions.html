@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% import "_fields.html" as f %}
+{% block title %}{{ section_info.title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ section_info.title }}</h1>
+  <a class="btn" href="/admin/promotions/new">Добавить</a>
+</div>
+<p class="muted">Карточки на экране «Акции» и на главной. Персональные предложения видят только выбранные гости.</p>
+{% if items %}
+<table class="table">
+  <thead><tr><th></th><th>Акция</th><th>Для кого</th><th>Период</th><th>На главной</th><th>Порядок</th><th>Статус</th></tr></thead>
+  <tbody>
+  {% for item in items %}
+    <tr{% if not item.is_active %} class="inactive"{% endif %}>
+      <td class="thumb">{% if image_urls[item.id] %}<img src="{{ image_urls[item.id] }}" alt="">{% endif %}</td>
+      <td>
+        <a href="/admin/promotions/{{ item.id }}">{{ item.title }}</a>
+        <div class="hint">{{ kind_labels[item.kind] }}</div>
+      </td>
+      <td>
+        {% if item.audience == "all" %}
+        {{ audience_labels["all"] }}
+        {% elif item.audience == "phones" %}
+        <span class="badge badge-accent">Персональная</span>
+        <div class="hint">{{ item.audience_phones|length }} номер(ов)</div>
+        {% else %}
+        <span class="badge badge-accent">Персональная</span>
+        <div class="hint">Уровни: {{ item.audience_tiers|join(", ") }}</div>
+        {% if not tiers_enabled %}<div class="error">Уровни выключены — акцию никто не видит</div>{% endif %}
+        {% endif %}
+      </td>
+      <td class="hint">
+        {% if item.starts_at or item.ends_at %}
+        {{ item.starts_at|msk if item.starts_at else "…" }} — {{ item.ends_at|msk if item.ends_at else "…" }}
+        {% else %}Без ограничений{% endif %}
+      </td>
+      <td>{{ "Да" if item.show_on_home else "Нет" }}</td>
+      <td>{{ f.move(page, item, loop.first, loop.last) }}</td>
+      <td>{{ f.status(page, item) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">Акций пока нет</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Вход{% endblock %}
+{% block content %}
+<div class="login-wrap">
+  <form method="post" action="/admin/login" class="card form login-card">
+    <div>
+      <h1>Пекарня</h1>
+      <p class="muted">Панель управления</p>
+    </div>
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <label class="field">
+      <span class="label">Логин</span>
+      <input type="text" name="login" autocomplete="username" maxlength="64" required autofocus>
+    </label>
+    <label class="field">
+      <span class="label">Пароль</span>
+      <input type="password" name="password" autocomplete="current-password" maxlength="256" required>
+    </label>
+    <button type="submit" class="btn">Войти</button>
+  </form>
+</div>
+{% endblock %}

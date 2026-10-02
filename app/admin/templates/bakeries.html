@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% import "_fields.html" as f %}
+{% block title %}{{ section_info.title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ section_info.title }}</h1>
+  <a class="btn" href="/admin/bakeries/new">Добавить</a>
+</div>
+<p class="muted">Адреса на карте и в списке «Наши адреса».</p>
+{% if items %}
+<table class="table">
+  <thead><tr><th>Название</th><th>Адрес</th><th>Метро</th><th>Часы работы</th><th>Координаты</th><th>Порядок</th><th>Статус</th></tr></thead>
+  <tbody>
+  {% for item in items %}
+    <tr{% if not item.is_active %} class="inactive"{% endif %}>
+      <td><a href="/admin/bakeries/{{ item.id }}">{{ item.name }}</a></td>
+      <td>{{ item.address }}</td>
+      <td>{{ item.metro or "—" }}</td>
+      <td>{{ item.hours_text or "—" }}</td>
+      <td class="num">{{ "%.5f"|format(item.latitude) }}, {{ "%.5f"|format(item.longitude) }}</td>
+      <td>{{ f.move(page, item, loop.first, loop.last) }}</td>
+      <td>{{ f.status(page, item) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">Пекарен пока нет</div>
+{% endif %}
+{% endblock %}

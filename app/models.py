@@ -2,8 +2,22 @@ import enum
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Numeric, String, UniqueConstraint, func, text, true
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+    false,
+    func,
+    text,
+    true,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -22,6 +36,7 @@ class SyncStatus(str, enum.Enum):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("referral_code", name="uq_users_referral_code"),)
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     phone: Mapped[str] = mapped_column(String(20), unique=True, index=True)
@@ -31,6 +46,11 @@ class User(Base):
     birthdate: Mapped[str] = mapped_column(String(10), default="")
     gender: Mapped[str] = mapped_column(String(10), default="")
     promo_code: Mapped[str] = mapped_column(String(50), default="")
+    referral_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    referred_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    referred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     iiko_link: Mapped["IikoLink | None"] = relationship(back_populates="user", uselist=False)
@@ -155,3 +175,120 @@ class Purchase(Base):
     terminal_group_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     bakery: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    updated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+PROMOTION_KINDS = ("generic", "coffee_stamps", "referral", "happy_hours", "combo")
+PROMOTION_AUDIENCES = ("all", "phones", "tiers")
+
+
+def _in_list(column: str, values: tuple[str, ...]) -> str:
+    return f"{column} IN ({', '.join(repr(value) for value in values)})"
+
+
+class Novelty(Base):
+    __tablename__ = "novelties"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    title: Mapped[str] = mapped_column(String(120))
+    image: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sort_order: Mapped[int] = mapped_column(server_default=text("0"))
+    is_active: Mapped[bool] = mapped_column(server_default=true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Promotion(Base):
+    __tablename__ = "promotions"
+    __table_args__ = (
+        CheckConstraint(_in_list("kind", PROMOTION_KINDS), name="ck_promotions_kind"),
+        CheckConstraint(_in_list("audience", PROMOTION_AUDIENCES), name="ck_promotions_audience"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    kind: Mapped[str] = mapped_column(String(20), server_default=text("'generic'"))
+    title: Mapped[str] = mapped_column(String(120))
+    subtitle: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    badge: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    old_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    time_text: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    image: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    show_on_home: Mapped[bool] = mapped_column(server_default=false())
+    sort_order: Mapped[int] = mapped_column(server_default=text("0"))
+    is_active: Mapped[bool] = mapped_column(server_default=true())
+    audience: Mapped[str] = mapped_column(String(10), server_default=text("'all'"))
+    audience_phones: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    audience_tiers: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Bakery(Base):
+    __tablename__ = "bakeries"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    name: Mapped[str] = mapped_column(String(120))
+    address: Mapped[str] = mapped_column(String(255))
+    metro: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    hours_text: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    latitude: Mapped[float]
+    longitude: Mapped[float]
+    sort_order: Mapped[int] = mapped_column(server_default=text("0"))
+    is_active: Mapped[bool] = mapped_column(server_default=true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ReferralReward(Base):
+    __tablename__ = "referral_rewards"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    referred_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True
+    )
+    referrer_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    referrer_done: Mapped[bool] = mapped_column(server_default=false())
+    referred_done: Mapped[bool] = mapped_column(server_default=false())
+    referrer_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    referred_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(server_default=text("0"))
+    last_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    login: Mapped[str] = mapped_column(String(64), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(server_default=true())
+    session_version: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

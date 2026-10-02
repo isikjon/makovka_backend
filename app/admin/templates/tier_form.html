@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% import "_fields.html" as f %}
+{% block title %}{{ tier.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back" href="/admin/tiers">← Уровни лояльности</a>
+    <h1>{{ tier.name }} <span class="hint">{{ tier.code }}</span></h1>
+  </div>
+</div>
+{{ f.form_error(errors) }}
+<form method="post" action="/admin/tiers/{{ tier.id }}" class="card form">
+  {{ f.csrf(page) }}
+  {{ f.input("name", "Название", data, errors, required=true, maxlength=100) }}
+  <div class="row">
+    {{ f.input("min_spend", "Сумма покупок от, ₽", data, errors, required=true) }}
+    {{ f.input("discount_percent", "Скидка, %", data, errors, required=true) }}
+    {{ f.input("cashback_percent", "Кешбэк, %", data, errors, required=true) }}
+  </div>
+  {{ f.textarea("perks", "Привилегии", data, errors, rows=4, hint="По одной в строке") }}
+  <div class="field{% if errors.get('iiko_category_manual') %} invalid{% endif %}">
+    <span class="label">Категория гостя в iiko</span>
+    {% if categories %}
+    {% set current = data.get("iiko_category_id", "") %}
+    {% set ns = namespace(found=false) %}
+    <select name="iiko_category_id">
+      <option value="">— не задана —</option>
+      {% for category in categories %}
+      {% set selected = current and category.id|lower == current|lower %}
+      {% if selected %}{% set ns.found = true %}{% endif %}
+      <option value="{{ category.id }}"{% if selected %} selected{% endif %}>{{ category.name }}</option>
+      {% endfor %}
+      {% if current and not ns.found %}<option value="{{ current }}" selected>{{ current }} (нет в iiko)</option>{% endif %}
+    </select>
+    <input type="text" name="iiko_category_manual" value="{{ data.get('iiko_category_manual', '') }}" placeholder="или ID категории вручную">
+    <span class="hint">Если заполнить поле вручную, оно заменит выбор из списка.</span>
+    {% else %}
+    <input type="text" name="iiko_category_manual" value="{{ data.get('iiko_category_manual') or data.get('iiko_category_id', '') }}" placeholder="00000000-0000-0000-0000-000000000000">
+    {% if categories_error %}<span class="hint">{{ categories_error }}</span>{% endif %}
+    {% endif %}
+    {{ f.error(errors, "iiko_category_manual") }}
+  </div>
+  {{ f.checkbox("is_active", "Уровень активен", data) }}
+  <div class="note">
+    Категория в iiko даёт гостю скидку этого уровня на кассе. Реальным гостям категории меняются, только когда разработчик
+    установил <b>IIKO_ENV=prod</b> на сервере и включена синхронизация категорий. Сейчас окружение: <b>{{ iiko_env }}</b>.
+  </div>
+  <div class="actions">
+    <button type="submit" class="btn">Сохранить</button>
+    <a class="btn btn-ghost" href="/admin/tiers">Отмена</a>
+  </div>
+</form>
+{% endblock %}

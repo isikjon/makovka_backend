@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% import "_fields.html" as f %}
+{% block title %}{{ section_info.title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ section_info.title }}</h1>
+  <a class="btn" href="/admin/novelties/new">Добавить</a>
+</div>
+<p class="muted">Лента «Новинки» на главном экране приложения. Порядок в приложении совпадает с порядком в списке.</p>
+{% if items %}
+<table class="table">
+  <thead><tr><th></th><th>Название</th><th>Порядок</th><th>Статус</th><th></th></tr></thead>
+  <tbody>
+  {% for item in items %}
+    <tr{% if not item.is_active %} class="inactive"{% endif %}>
+      <td class="thumb">{% if image_urls[item.id] %}<img src="{{ image_urls[item.id] }}" alt="">{% endif %}</td>
+      <td><a href="/admin/novelties/{{ item.id }}">{{ item.title }}</a></td>
+      <td>{{ f.move(page, item, loop.first, loop.last) }}</td>
+      <td>{{ f.status(page, item) }}</td>
+      <td class="right"><a href="/admin/novelties/{{ item.id }}">Изменить</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">Новинок пока нет</div>
+{% endif %}
+{% endblock %}

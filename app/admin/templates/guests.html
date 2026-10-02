@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Гости{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Гости</h1>
+  <span class="muted">Всего: {{ total }}</span>
+</div>
+<form method="get" action="/admin/guests" class="search">
+  <input type="search" name="q" value="{{ q }}" placeholder="Последние цифры телефона" inputmode="numeric" maxlength="10">
+  <button type="submit" class="btn">Найти</button>
+  {% if q %}<a class="btn btn-ghost" href="/admin/guests">Сбросить</a>{% endif %}
+</form>
+{% if rows %}
+<table class="table">
+  <thead><tr><th>Телефон</th><th>Имя</th><th>iiko</th><th>Карта</th><th>Уровень</th><th class="num">Сумма покупок</th><th class="num">Бонусы</th><th>Регистрация</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td class="num">{{ row.phone }}</td>
+      <td>{{ row.name }}</td>
+      <td>{{ row.link_status }}</td>
+      <td class="num">{{ row.card }}</td>
+      <td>{{ row.tier }}</td>
+      <td class="num">{{ row.total_spend|money }}</td>
+      <td class="num">{{ row.bonus_balance|money }}</td>
+      <td class="hint">{{ row.created_at|msk }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<div class="pager">
+  {% if page_number > 1 %}<a class="btn btn-ghost btn-small" href="/admin/guests?page={{ page_number - 1 }}{% if q %}&amp;q={{ q }}{% endif %}">← Назад</a>{% endif %}
+  <span class="muted">Страница {{ page_number }} из {{ pages }}</span>
+  {% if page_number < pages %}<a class="btn btn-ghost btn-small" href="/admin/guests?page={{ page_number + 1 }}{% if q %}&amp;q={{ q }}{% endif %}">Вперёд →</a>{% endif %}
+</div>
+{% else %}
+<div class="empty">{{ "Никого не нашли" if q else "Гостей пока нет" }}</div>
+{% endif %}
+{% endblock %}

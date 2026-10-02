@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+from ..config import get_settings, is_review_demo
 from ..db import async_session_factory
 from ..models import IikoLink, SyncStatus, User
 from .client import IikoClientError, IikoCloudClient, generate_card_number
@@ -12,7 +13,7 @@ async def sync_user_with_iiko(user_id: uuid.UUID, iiko: IikoCloudClient) -> None
     async with async_session_factory() as db:
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
-        if user is None:
+        if user is None or is_review_demo(get_settings(), user.phone):
             return
         result = await db.execute(select(IikoLink).where(IikoLink.user_id == user_id))
         link = result.scalar_one_or_none()

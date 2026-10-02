@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% import "_fields.html" as f %}
+{% set heading = section_info.edit_title if item else section_info.new_title %}
+{% block title %}{{ heading }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back" href="/admin/promotions">← {{ section_info.title }}</a>
+    <h1>{{ heading }}</h1>
+  </div>
+</div>
+{{ f.form_error(errors) }}
+<form method="post" action="/admin/promotions/{{ item.id if item else 'new' }}" enctype="multipart/form-data" class="card form">
+  {{ f.csrf(page) }}
+  <label class="field{% if errors.get('kind') %} invalid{% endif %}">
+    <span class="label">Тип карточки</span>
+    <select name="kind">
+      {% for value, label in kind_labels.items() %}
+      <option value="{{ value }}"{% if data.get("kind") == value %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <span class="hint">Определяет оформление карточки в приложении</span>
+    {{ f.error(errors, "kind") }}
+  </label>
+  {{ f.input("title", "Заголовок", data, errors, required=true, maxlength=120, hint="Для карточки «Кофейные штампы» {n} в заголовке, подзаголовке и описании заменяется номером чашки со скидкой") }}
+  {{ f.input("subtitle", "Подзаголовок", data, errors, maxlength=200) }}
+  {{ f.textarea("description", "Описание", data, errors, rows=3, maxlength=1000) }}
+  <div class="row">
+    {{ f.input("badge", "Бейдж", data, errors, maxlength=20, placeholder="-30%") }}
+    {{ f.input("price", "Цена, ₽", data, errors, placeholder="299") }}
+    {{ f.input("old_price", "Старая цена, ₽", data, errors, placeholder="420") }}
+  </div>
+  {{ f.input("time_text", "Время действия (текст)", data, errors, maxlength=60, placeholder="С 20:30 до 00:00") }}
+  <div class="row">
+    {{ f.input("starts_at", "Начало показа", data, errors, type="datetime-local", hint="Московское время. Пусто — сразу") }}
+    {{ f.input("ends_at", "Окончание показа", data, errors, type="datetime-local", hint="Московское время. Пусто — бессрочно") }}
+  </div>
+  {{ f.image(errors, image_url, max_upload_mb) }}
+
+  <fieldset>
+    <legend>Для кого</legend>
+    <div class="choices">
+      {% for value, label in audience_labels.items() %}
+      <label class="check"><input type="radio" name="audience" value="{{ value }}"{% if data.get("audience") == value %} checked{% endif %}> {{ label }}</label>
+      {% endfor %}
+    </div>
+    {{ f.error(errors, "audience") }}
+    {{ f.textarea("audience_phones", "Номера телефонов", data, errors, rows=5, hint="Для варианта «По номерам телефонов»: по одному номеру в строке или через запятую, в любом формате (+7 999 123-45-67, 89991234567)") }}
+    <div class="field{% if errors.get('audience_tiers') %} invalid{% endif %}">
+      <span class="label">Уровни лояльности</span>
+      <div class="choices">
+        {% for tier in tiers %}
+        <label class="check"><input type="checkbox" name="audience_tiers" value="{{ tier.code }}"{% if tier.code in data.get("audience_tiers", []) %} checked{% endif %}> {{ tier.name }}</label>
+        {% endfor %}
+      </div>
+      <span class="hint">Для варианта «По уровням лояльности».{% if not tiers_enabled %} Сейчас уровни выключены в настройках — такие акции никому не показываются.{% endif %}</span>
+      {{ f.error(errors, "audience_tiers") }}
+    </div>
+    {% if preview is not none %}
+    <div class="note">Под условия подходит гостей: <b>{{ preview }}</b></div>
+    {% endif %}
+  </fieldset>
+
+  <div class="row">
+    {{ f.input("sort_order", "Порядок", data, errors, type="number", hint="Меньше — выше в списке") }}
+  </div>
+  {{ f.checkbox("show_on_home", "Показывать на главном экране", data) }}
+  {{ f.checkbox("is_active", "Акция активна", data) }}
+  <div class="actions">
+    <button type="submit" class="btn" name="action" value="save">Сохранить</button>
+    <button type="submit" class="btn btn-ghost" name="action" value="preview">Посчитать гостей</button>
+    <a class="btn btn-ghost" href="/admin/promotions">Отмена</a>
+  </div>
+</form>
+{% if item %}{{ f.delete(page, item) }}{% endif %}
+{% endblock %}

@@ -8,6 +8,7 @@ import pytest
 from app.loyalty.rules import (
     bakery_name,
     build_purchases,
+    canonical_uuid,
     count_coffee_stamps,
     extract_category_ids,
     format_iiko_datetime,
@@ -20,6 +21,7 @@ from app.loyalty.rules import (
     plan_category_changes,
     resolve_bonus_wallet_id,
     resolve_tier,
+    tier_spend_ranges,
     to_money,
 )
 
@@ -513,18 +515,62 @@ class TestWallets:
 
 class TestBonusWalletId:
     def test_configured_id_is_used_even_if_guest_lacks_wallet(self):
-        assert resolve_bonus_wallet_id([WALLETS[0]], "configured-bonus", "coffee-wallet") == "configured-bonus"
+        assert resolve_bonus_wallet_id([WALLETS[0]], "configured-bonus", ("coffee-wallet",)) == "configured-bonus"
 
     def test_falls_back_to_bonus_type_wallet(self):
-        assert resolve_bonus_wallet_id(WALLETS, "", "coffee-wallet") == "c4a67eee-d7c2-11e9-80dd-d8d385655247"
+        assert resolve_bonus_wallet_id(WALLETS, "", ("coffee-wallet",)) == "c4a67eee-d7c2-11e9-80dd-d8d385655247"
 
     def test_fallback_never_picks_coffee_wallet(self):
         wallets = [{"id": "coffee-wallet", "type": 1, "balance": 3}]
-        assert resolve_bonus_wallet_id(wallets, "", "COFFEE-WALLET") is None
+        assert resolve_bonus_wallet_id(wallets, "", ("COFFEE-WALLET",)) is None
+
+    def test_fallback_skips_every_known_coffee_wallet(self):
+        wallets = [
+            {"id": "env-coffee", "type": 1, "balance": 3},
+            {"id": "admin-coffee", "type": 1, "balance": 2},
+            {"id": "bonus", "type": 1, "balance": 90},
+        ]
+        assert resolve_bonus_wallet_id(wallets, "", ("ENV-COFFEE", "admin-coffee")) == "bonus"
+        assert resolve_bonus_wallet_id(wallets, "", ("env-coffee", "")) == "admin-coffee"
 
     @pytest.mark.parametrize("wallets", [None, [], [{"type": 1, "balance": 5}], [WALLETS[0]]])
     def test_unidentified_bonus_wallet(self, wallets):
-        assert resolve_bonus_wallet_id(wallets, "", "") is None
+        assert resolve_bonus_wallet_id(wallets, "", ("",)) is None
+
+
+class TestCanonicalUuid:
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            " 3FA85F64-5717-4562-B3FC-2C963F66AFA6 ",
+            "3fa85f6457174562b3fc2c963f66afa6",
+            "3fa85f64-57174562-b3fc2c963f66afa6",
+        ],
+    )
+    def test_normalizes_case_and_dashes(self, raw):
+        assert canonical_uuid(raw) == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "",
+            "not-a-uuid",
+            "{3fa85f64-5717-4562-b3fc-2c963f66afa6}",
+            "urn:uuid:3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "3fa85f64-5717-4562-b3fc-2c963f66afa",
+            "3fa85f64--5717-4562-b3fc-2c963f66afa6",
+        ],
+    )
+    def test_rejects_anything_else(self, raw):
+        assert canonical_uuid(raw) is None
+
+
+class TestTierSpendRanges:
+    def test_ranges_match_resolve_tier(self):
+        tiers = [Tier("bronze", Decimal(0)), Tier("silver", Decimal(5000)), Tier("gold", Decimal(10000))]
+        assert tier_spend_ranges(tiers, ["silver", "gold"]) == [(Decimal(5000), Decimal(10000)), (Decimal(10000), None)]
+        assert tier_spend_ranges(tiers, ["unknown"]) == []
 
 
 class TestCoffeeStamps:

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% import "_fields.html" as f %}
+{% block title %}Настройки{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Настройки</h1>
+</div>
+{{ f.form_error(errors) }}
+<form method="post" action="/admin/settings" class="card">
+  {{ f.csrf(page) }}
+  <p class="muted">Изменения применяются в приложении в течение 15 секунд. Изменённое значение сохраняется, даже если стоит отметка «Как в .env». Чтобы вернуть значение из конфигурации сервера, отметьте «Как в .env» у ранее изменённой настройки.</p>
+  <table class="table">
+    <thead><tr><th>Настройка</th><th>Значение</th><th>В .env</th><th>Как в .env</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>
+          <b>{{ row.setting.label }}</b>
+          {% if row.setting.hint %}<div class="hint">{{ row.setting.hint }}</div>{% endif %}
+          {% if row.override %}<div class="hint">Изменил {{ row.override.updated_by or "—" }}, {{ row.override.updated_at|msk }}</div>{% endif %}
+        </td>
+        <td class="{% if row.error %}invalid{% endif %}">
+          {% if row.setting.kind == "bool" %}
+          <select name="value_{{ row.setting.key }}">
+            <option value="true"{% if row.value|setting_input == "true" %} selected{% endif %}>Да</option>
+            <option value="false"{% if row.value|setting_input == "false" %} selected{% endif %}>Нет</option>
+          </select>
+          {% else %}
+          <input type="text" name="value_{{ row.setting.key }}" value="{{ row.value|setting_input }}">
+          {% endif %}
+          {% if row.error %}<span class="error">{{ row.error }}</span>{% endif %}
+        </td>
+        <td class="muted">{{ row.env_value|setting_value }}</td>
+        <td><label class="check"><input type="checkbox" name="inherit_{{ row.setting.key }}"{% if row.inherit %} checked{% endif %}> да</label></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p></p>
+  <div class="actions"><button type="submit" class="btn">Сохранить</button></div>
+</form>
+
+<div class="card">
+  <h2>Интеграция с iiko (только чтение)</h2>
+  <dl class="facts">
+    <dt>Окружение</dt><dd>{{ iiko_env }}</dd>
+    <dt>Изменения в iiko</dt><dd>{{ "разрешены" if iiko_mutations_enabled else "запрещены аварийным выключателем" }}</dd>
+    <dt>Тестовый гость для staging</dt><dd>{{ "задан" if iiko_test_guest_configured else "не задан" }}</dd>
+  </dl>
+  <div class="note">
+    Эти параметры меняет только разработчик в .env на сервере. Изменение категорий и кошельков реальных гостей
+    (синхронизация уровней, бонусы за друзей) работает только при <b>IIKO_ENV=prod</b>; в staging такие изменения
+    применяются только к тестовому гостю.
+  </div>
+</div>
+{% endblock %}

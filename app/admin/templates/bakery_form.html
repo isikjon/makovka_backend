@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% import "_fields.html" as f %}
+{% set heading = section_info.edit_title if item else section_info.new_title %}
+{% block title %}{{ heading }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back" href="/admin/bakeries">← {{ section_info.title }}</a>
+    <h1>{{ heading }}</h1>
+  </div>
+</div>
+{{ f.form_error(errors) }}
+<form method="post" action="/admin/bakeries/{{ item.id if item else 'new' }}" class="card form">
+  {{ f.csrf(page) }}
+  {{ f.input("name", "Название", data, errors, required=true, maxlength=120) }}
+  {{ f.input("address", "Адрес", data, errors, required=true, maxlength=255, placeholder="Сходненская улица, 35 к1") }}
+  <div class="row">
+    {{ f.input("metro", "Метро", data, errors, maxlength=120, placeholder="Метро Сходненская") }}
+    {{ f.input("hours_text", "Часы работы", data, errors, maxlength=120, placeholder="Открыто с 07:00 до 23:00") }}
+  </div>
+  <div class="row">
+    {{ f.input("latitude", "Широта", data, errors, required=true, placeholder="55.8583", hint="От −90 до 90") }}
+    {{ f.input("longitude", "Долгота", data, errors, required=true, placeholder="37.4553", hint="От −180 до 180") }}
+    {{ f.input("sort_order", "Порядок", data, errors, type="number") }}
+  </div>
+  {{ f.checkbox("is_active", "Показывать в приложении", data) }}
+  <div class="actions">
+    <button type="submit" class="btn">Сохранить</button>
+    <a class="btn btn-ghost" href="/admin/bakeries">Отмена</a>
+  </div>
+</form>
+{% if item %}{{ f.delete(page, item) }}{% endif %}
+{% endblock %}

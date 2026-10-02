@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config import Settings, get_settings
+from ..config import Settings, is_review_demo
 from ..db import get_db
 from ..deps import get_current_user, get_iiko_client
 from ..iiko.client import IikoCloudClient
@@ -17,9 +17,11 @@ from ..loyalty.service import (
     load_state,
     mark_link_pending,
     needs_relink,
+    review_demo_link,
     run_loyalty_sync,
 )
 from ..models import User
+from ..runtime_settings import get_effective_settings
 from ..schemas import LoyaltyOut, PurchaseHistoryOut
 
 router = APIRouter(prefix="/loyalty", tags=["loyalty"])
@@ -31,9 +33,11 @@ async def get_loyalty(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     iiko: IikoCloudClient = Depends(get_iiko_client),
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(get_effective_settings),
 ):
     now = datetime.now(timezone.utc)
+    if is_review_demo(settings, user.phone):
+        return await build_loyalty_out(db, settings, review_demo_link(settings), None, now)
     link = await load_link(db, user.id)
     state = await load_state(db, user.id)
     refreshing = await claim_due_sync(db, user.id, link, state, settings, now)
@@ -52,12 +56,12 @@ async def get_history(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     iiko: IikoCloudClient = Depends(get_iiko_client),
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(get_effective_settings),
 ):
     now = datetime.now(timezone.utc)
     link = await load_link(db, user.id)
     state = await load_state(db, user.id)
-    if await claim_due_sync(db, user.id, link, state, settings, now):
+    if not is_review_demo(settings, user.phone) and await claim_due_sync(db, user.id, link, state, settings, now):
         background_tasks.add_task(run_loyalty_sync, user.id, iiko)
     out = await build_history_out(db, user.id, state, limit=limit, offset=offset)
     await db.commit()
@@ -70,9 +74,11 @@ async def refresh_loyalty(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     iiko: IikoCloudClient = Depends(get_iiko_client),
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(get_effective_settings),
 ):
     now = datetime.now(timezone.utc)
+    if is_review_demo(settings, user.phone):
+        return await build_loyalty_out(db, settings, review_demo_link(settings), None, now)
     link = await load_link(db, user.id)
     relink = bool(user.name.strip()) and needs_relink(link, now)
     refreshing = relink or is_linked(link)

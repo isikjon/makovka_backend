@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% import "_fields.html" as f %}
+{% set heading = section_info.edit_title if item else section_info.new_title %}
+{% block title %}{{ heading }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back" href="/admin/novelties">← {{ section_info.title }}</a>
+    <h1>{{ heading }}</h1>
+  </div>
+</div>
+{{ f.form_error(errors) }}
+<form method="post" action="/admin/novelties/{{ item.id if item else 'new' }}" enctype="multipart/form-data" class="card form">
+  {{ f.csrf(page) }}
+  {{ f.input("title", "Название", data, errors, required=true, maxlength=120) }}
+  {{ f.image(errors, image_url, max_upload_mb) }}
+  <div class="row">
+    {{ f.input("sort_order", "Порядок", data, errors, type="number", hint="Меньше — левее в ленте") }}
+  </div>
+  {{ f.checkbox("is_active", "Показывать в приложении", data) }}
+  <div class="actions">
+    <button type="submit" class="btn">Сохранить</button>
+    <a class="btn btn-ghost" href="/admin/novelties">Отмена</a>
+  </div>
+</form>
+{% if item %}{{ f.delete(page, item) }}{% endif %}
+{% endblock %}

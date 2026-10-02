@@ -6,13 +6,13 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from app.config import get_settings
 from app.db import get_db
 from app.deps import get_current_user, get_iiko_client
 from app.loyalty import service
 from app.main import app
 from app.models import IikoLink, LoyaltyState, SyncStatus, User
 from app.routers import loyalty as loyalty_routes
+from app.runtime_settings import get_effective_settings
 from app.schemas import PurchaseHistoryOut
 
 USER_ID = uuid.uuid4()
@@ -117,7 +117,7 @@ def env(monkeypatch, make_settings):
     app.dependency_overrides[get_current_user] = lambda: User(id=USER_ID, phone="+79990000001", name=current.name)
     app.dependency_overrides[get_db] = fake_db
     app.dependency_overrides[get_iiko_client] = lambda: IIKO
-    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_effective_settings] = lambda: settings
     yield current
     app.dependency_overrides.clear()
 

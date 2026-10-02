@@ -312,3 +312,48 @@ class TestReadMethods:
             {"organizationIds": ["org-1"], "includeDisabled": True},
         )
         assert len(fake.calls) == 1
+
+
+class TestWalletTopup:
+    async def test_payload(self, make_client):
+        fake = FakeIiko()
+        client = make_client(fake)
+        await client.topup_wallet(
+            customer_id="guest-1",
+            wallet_id="wallet-1",
+            amount=Decimal("300.00"),
+            comment="Бонус за приглашённого друга",
+            guard_phone=TEST_GUEST_PHONE,
+        )
+        assert fake.calls[0][:2] == (
+            "/api/1/loyalty/iiko/customer/wallet/topup",
+            {
+                "organizationId": "org-1",
+                "customerId": "guest-1",
+                "walletId": "wallet-1",
+                "sum": 300.0,
+                "comment": "Бонус за приглашённого друга",
+            },
+        )
+
+    async def test_staging_guard_uses_guard_phone(self, make_client):
+        fake = FakeIiko()
+        client = make_client(fake)
+        with pytest.raises(IikoMutationBlocked):
+            await client.topup_wallet(
+                customer_id="guest-2",
+                wallet_id="wallet-1",
+                amount=Decimal("300"),
+                comment="x",
+                guard_phone="+79991112233",
+            )
+        assert fake.calls == []
+
+    async def test_server_error_is_not_retried(self, make_client):
+        fake = FakeIiko(_sequence(httpx.Response(504, json={}), httpx.Response(200, json={})))
+        client = make_client(fake)
+        with pytest.raises(IikoClientError):
+            await client.topup_wallet(
+                customer_id="guest-1", wallet_id="w", amount=Decimal("1"), comment="x", guard_phone=TEST_GUEST_PHONE
+            )
+        assert len(fake.calls) == 1

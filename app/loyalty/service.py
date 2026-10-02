@@ -12,11 +12,13 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config import Settings, get_settings
+from ..config import Settings, get_settings, is_review_demo
 from ..db import async_session_factory
 from ..iiko.client import IikoClientError, IikoCloudClient
 from ..iiko.sync import sync_user_with_iiko
 from ..models import IikoLink, LoyaltyState, LoyaltyTier, Purchase, SyncStatus, User
+from ..referral.service import process_referral_reward
+from ..runtime_settings import get_effective_settings
 from ..schemas import CoffeeOut, LoyaltyOut, PurchaseHistoryOut, PurchaseOut, TierOut
 from .rules import (
     build_purchases,
@@ -57,6 +59,14 @@ def _user_lock(user_id: uuid.UUID) -> asyncio.Lock:
 
 def is_linked(link: IikoLink | None) -> bool:
     return link is not None and bool(link.iiko_customer_id)
+
+
+def tier_sync_enabled(settings: Settings) -> bool:
+    return settings.loyalty_tiers_enabled and settings.loyalty_tier_sync_enabled
+
+
+def effective_spend(link: IikoLink | None, state: LoyaltyState | None) -> Decimal:
+    return state.total_spend if state is not None and is_linked(link) else Decimal(0)
 
 
 def needs_relink(link: IikoLink | None, now: datetime) -> bool:
@@ -170,12 +180,12 @@ async def sync_user_loyalty(user_id: uuid.UUID, iiko: IikoCloudClient) -> None:
 
 
 async def _sync(db: AsyncSession, user_id: uuid.UUID, iiko: IikoCloudClient) -> None:
-    settings = get_settings()
+    settings = await get_effective_settings()
     now = datetime.now(timezone.utc)
     user = await db.get(User, user_id)
     link = await load_link(db, user_id)
     state = await load_state(db, user_id)
-    if user is None or state is None or not is_linked(link):
+    if user is None or state is None or not is_linked(link) or is_review_demo(settings, user.phone):
         return
     history_from = await _history_start(db, user_id, settings, now)
     await db.commit()
@@ -198,7 +208,9 @@ async def _sync(db: AsyncSession, user_id: uuid.UUID, iiko: IikoCloudClient) -> 
 
     wallets = customer.get("walletBalances") or []
     bonus_wallet_id = resolve_bonus_wallet_id(
-        wallets, settings.loyalty_bonus_wallet_id, settings.coffee_stamp_wallet_id
+        wallets,
+        settings.loyalty_bonus_wallet_id,
+        (get_settings().coffee_stamp_wallet_id, settings.coffee_stamp_wallet_id),
     )
     await _store_purchases(
         db, user_id, build_purchases(transactions, bakeries, bonus_wallet_id=bonus_wallet_id)
@@ -218,14 +230,18 @@ async def _sync(db: AsyncSession, user_id: uuid.UUID, iiko: IikoCloudClient) -> 
     state.last_error = None
     await db.commit()
 
-    if settings.loyalty_tiers_enabled and settings.loyalty_tier_sync_enabled:
-        target_category_id = current.iiko_category_id if current else None
+    tier_sync = tier_sync_enabled(settings)
+    if tier_sync or state.synced_category_id:
+        target_category_id = current.iiko_category_id if tier_sync and current else None
+        removable = [*(tier.iiko_category_id for tier in tiers), state.synced_category_id]
         try:
-            await _sync_category(db, iiko, user, customer_id, customer, target_category_id, tiers)
+            await _sync_category(db, iiko, user, customer_id, customer, target_category_id, removable)
             state.synced_category_id = target_category_id
         except IikoClientError as exc:
             state.last_error = str(exc)[:_ERROR_MAX_LENGTH]
         await db.commit()
+
+    await process_referral_reward(db, iiko, user, settings)
 
 
 async def _history_start(
@@ -295,12 +311,10 @@ async def _sync_category(
     customer_id: str,
     customer: Mapping[str, Any],
     target_category_id: str | None,
-    tiers: Sequence[LoyaltyTier],
+    removable_category_ids: Sequence[str | None],
 ) -> None:
     to_add, to_remove = plan_category_changes(
-        target_category_id,
-        extract_category_ids(customer),
-        [tier.iiko_category_id for tier in tiers],
+        target_category_id, extract_category_ids(customer), removable_category_ids
     )
     for category_id in to_add:
         await iiko.add_customer_category(
@@ -321,6 +335,10 @@ def _tier_out(tier: LoyaltyTier) -> TierOut:
         cashback_percent=float(tier.cashback_percent or 0),
         perks=list(tier.perks or []),
     )
+
+
+def review_demo_link(settings: Settings) -> IikoLink:
+    return IikoLink(sync_status=SyncStatus.synced, card_number=settings.review_demo_card_number)
 
 
 def _base_tier(settings: Settings) -> TierOut:
@@ -352,7 +370,7 @@ def assemble_loyalty_out(
 ) -> LoyaltyOut:
     linked = is_linked(link)
     snapshot = state if linked else None
-    total_spend = snapshot.total_spend if snapshot else Decimal(0)
+    total_spend = effective_spend(link, state)
     base_tier = _base_tier(settings)
 
     if settings.loyalty_tiers_enabled:
@@ -396,6 +414,16 @@ async def build_loyalty_out(
 ) -> LoyaltyOut:
     tiers = await _load_tiers(db, active_only=True) if settings.loyalty_tiers_enabled else []
     return assemble_loyalty_out(settings, link, state, tiers, now, refreshing=refreshing)
+
+
+async def load_current_tier_code(db: AsyncSession, settings: Settings, user: User) -> str | None:
+    tiers = await _load_tiers(db, active_only=True)
+    if is_review_demo(settings, user.phone):
+        link, state = review_demo_link(settings), None
+    else:
+        link, state = await load_link(db, user.id), await load_state(db, user.id)
+    current, _, _, _ = resolve_tier(tiers, effective_spend(link, state))
+    return current.code if current else None
 
 
 def _purchase_out(purchase: Purchase) -> PurchaseOut:
