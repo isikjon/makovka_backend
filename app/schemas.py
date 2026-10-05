@@ -20,8 +20,12 @@ def normalize_phone(raw: str) -> str:
     return normalized
 
 
+OtpChannel = Literal["sms", "call"]
+
+
 class OtpRequestIn(BaseModel):
     phone: str
+    channel: OtpChannel | None = None
 
     @field_validator("phone")
     @classmethod
@@ -33,6 +37,8 @@ class OtpRequestOut(BaseModel):
     phone: str
     expires_in_seconds: int
     dev_code: str | None = None
+    channel: OtpChannel
+    code_length: int
 
 
 class OtpVerifyIn(BaseModel):

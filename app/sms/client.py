@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import re
+
 import httpx
 
 from ..config import Settings
+
+_CALL_CODE_RE = re.compile(r"[0-9]{4}")
 
 
 class SmsSendError(Exception):
@@ -29,19 +33,47 @@ class SmsRuClient:
             "msg": text,
             "json": 1,
         }
-        try:
-            resp = await self._http.get("/sms/send", params=params)
-            resp.raise_for_status()
-            data = resp.json()
-        except httpx.HTTPError as exc:
-            raise SmsSendError(f"sms.ru request failed: {type(exc).__name__}") from exc
+        data = await self._get_json("/sms/send", params)
 
         if data.get("status") != "OK":
-            raise SmsSendError(data.get("status_text", "unknown sms.ru error"))
+            raise SmsSendError(data.get("status_text", "unknown sms.ru error"), status_code=data.get("status_code"))
 
-        result = data.get("sms", {}).get(phone, {})
+        results = data.get("sms") or {}
+        result = results.get(phone) or results.get(phone.lstrip("+")) or {}
         if result.get("status") != "OK":
             raise SmsSendError(
                 result.get("status_text", "unknown sms.ru delivery error"),
                 status_code=result.get("status_code"),
             )
+
+    async def call_otp(self, phone: str, ip: str) -> str:
+        params = {
+            "phone": phone.lstrip("+"),
+            "ip": ip,
+            "api_id": self._settings.sms_ru_api_id,
+        }
+        data = await self._get_json("/code/call", params)
+
+        if data.get("status") != "OK":
+            raise SmsSendError(
+                data.get("status_text", "unknown sms.ru call error"),
+                status_code=data.get("status_code"),
+            )
+
+        code = data.get("code")
+        if not isinstance(code, str) or not _CALL_CODE_RE.fullmatch(code):
+            raise SmsSendError("sms.ru returned an invalid call code")
+        return code
+
+    async def _get_json(self, path: str, params: dict) -> dict:
+        try:
+            resp = await self._http.get(path, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+        except httpx.HTTPError as exc:
+            raise SmsSendError(f"sms.ru request failed: {type(exc).__name__}") from exc
+        except ValueError as exc:
+            raise SmsSendError("sms.ru returned a non-JSON response") from exc
+        if not isinstance(data, dict):
+            raise SmsSendError("sms.ru returned an unexpected response")
+        return data

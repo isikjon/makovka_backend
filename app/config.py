@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     otp_mock_mode: bool = True
     otp_dev_code: str = "000000"
     otp_ttl_minutes: int = 5
+    otp_call_fallback_enabled: bool = True
+    otp_requests_per_hour_per_phone: int = 5
+    otp_calls_per_hour_per_phone: int = 3
+    otp_calls_per_hour_per_ip: int = 10
+    otp_failed_attempts_per_day_per_phone: int = 10
 
     iiko_api_login: str = ""
     iiko_base_url: str = "https://api-ru.iiko.services"
