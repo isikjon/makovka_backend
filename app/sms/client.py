@@ -6,7 +6,7 @@ import httpx
 
 from ..config import Settings
 
-_CALL_CODE_RE = re.compile(r"[0-9]{4}")
+_CALL_CODE_RE = re.compile(r"[0-9]{1,4}")
 
 
 class SmsSendError(Exception):
@@ -60,10 +60,7 @@ class SmsRuClient:
                 status_code=data.get("status_code"),
             )
 
-        code = data.get("code")
-        if not isinstance(code, str) or not _CALL_CODE_RE.fullmatch(code):
-            raise SmsSendError("sms.ru returned an invalid call code")
-        return code
+        return _normalize_call_code(data.get("code"), sorted(data))
 
     async def _get_json(self, path: str, params: dict) -> dict:
         try:
@@ -77,3 +74,17 @@ class SmsRuClient:
         if not isinstance(data, dict):
             raise SmsSendError("sms.ru returned an unexpected response")
         return data
+
+
+def _normalize_call_code(code: object, fields: list[str]) -> str:
+    if isinstance(code, int) and not isinstance(code, bool):
+        text = str(code)
+    elif isinstance(code, str):
+        text = code.strip()
+    else:
+        text = ""
+    if not _CALL_CODE_RE.fullmatch(text):
+        raise SmsSendError(
+            f"sms.ru returned an invalid call code ({type(code).__name__}; fields: {', '.join(fields)})"
+        )
+    return text.zfill(4)

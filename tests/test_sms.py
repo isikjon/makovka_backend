@@ -89,7 +89,7 @@ async def test_call_otp_raises_sms_ru_error(make_settings):
     assert str(caught.value) == "Неправильно указан номер"
 
 
-@pytest.mark.parametrize("code", ["123", "12345", "12a4", "١٢٣٤", "", None, 1234])
+@pytest.mark.parametrize("code", ["12345", "12a4", "١٢٣٤", "", None, 12345, -1, True, 12.5, ["1234"]])
 async def test_call_otp_rejects_malformed_code(make_settings, code):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"status": "OK", "code": code, "call_id": "000-1"})
@@ -98,7 +98,20 @@ async def test_call_otp_rejects_malformed_code(make_settings, code):
     with pytest.raises(SmsSendError) as caught:
         await client.call_otp(PHONE, "-1")
     await client.aclose()
-    assert str(caught.value) == "sms.ru returned an invalid call code"
+    assert str(caught.value).startswith("sms.ru returned an invalid call code")
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [("1435", "1435"), (1435, "1435"), (123, "0123"), (7, "0007"), ("0123", "0123"), ("123", "0123"), (" 1435 ", "1435"), (0, "0000")],
+)
+async def test_call_otp_normalizes_code(make_settings, code, expected):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "OK", "code": code, "call_id": "000-1", "cost": 0.4})
+
+    client = _client(make_settings, handler)
+    assert await client.call_otp(PHONE, "-1") == expected
+    await client.aclose()
 
 
 @pytest.mark.parametrize(
