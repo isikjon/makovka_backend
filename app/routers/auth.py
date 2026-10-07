@@ -1,5 +1,6 @@
 import ipaddress
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -21,13 +22,12 @@ from ..schemas import (
 )
 from ..security import (
     create_access_token,
-    generate_otp_code,
     generate_refresh_token,
     hash_otp_code,
     hash_refresh_token,
     verify_otp_code,
 )
-from ..sms.client import SmsRuClient, SmsSendError
+from ..sms.client import SmsCallResult, SmsRuClient, SmsSendError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger("app.auth")
@@ -56,6 +56,23 @@ def _fixed_code(settings: Settings, phone: str) -> str | None:
     if settings.otp_mock_mode:
         return settings.otp_dev_code
     return None
+
+
+def _fixed_call_code(settings: Settings, phone: str) -> str | None:
+    raw = _fixed_code(settings, phone)
+    if raw is None:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        raise RuntimeError("Configured OTP code must contain digits")
+    # Legacy review/dev settings sometimes contained a six-digit SMS code.
+    # The only supported live flow is a four-digit call code, so keep the
+    # compatibility value deterministic while never returning six digits.
+    return digits[-4:].zfill(4)
+
+
+def _mask_phone(phone: str) -> str:
+    return f"{phone[:3]}***{phone[-2:]}"
 
 
 def _active_code_filter(phone: str, now: datetime) -> tuple:
@@ -96,38 +113,35 @@ async def _ensure_attempts_left(db: AsyncSession, settings: Settings, phone: str
 
 async def _request_call(
     db: AsyncSession, sms: SmsRuClient, settings: Settings, phone: str, ip: str, now: datetime
-) -> str:
+) -> SmsCallResult:
     if await _count_recent(db, phone, now, "call") >= settings.otp_calls_per_hour_per_phone:
         raise _too_many("Слишком много звонков на этот номер, попробуйте позже")
     if ip != _UNKNOWN_IP and not call_ip_limiter.try_acquire(ip, settings.otp_calls_per_hour_per_ip):
         raise _too_many("Слишком много запросов звонка, попробуйте позже")
+    logger.warning(
+        "otp_delivery_started channel=call endpoint=/code/call phone=%s ip=%s",
+        _mask_phone(phone),
+        ip,
+    )
     try:
-        return await sms.call_otp(phone, ip)
+        result = await sms.call_otp(phone, ip)
     except SmsSendError as exc:
-        logger.warning("otp call failed: status_code=%s %s", exc.status_code, exc)
+        logger.warning(
+            "otp_delivery_result channel=call endpoint=/code/call phone=%s ip=%s status_code=%s error=%s",
+            _mask_phone(phone),
+            ip,
+            exc.status_code,
+            exc,
+        )
         raise _delivery_failed(exc) from exc
-
-
-async def _deliver_code(
-    db: AsyncSession,
-    sms: SmsRuClient,
-    settings: Settings,
-    phone: str,
-    channel: OtpChannel | None,
-    ip: str,
-    now: datetime,
-) -> tuple[str, OtpChannel]:
-    if channel == "call":
-        return await _request_call(db, sms, settings, phone, ip, now), "call"
-    code = generate_otp_code()
-    try:
-        await sms.send_otp(phone, code)
-    except SmsSendError as exc:
-        logger.warning("otp sms failed: status_code=%s %s", exc.status_code, exc)
-        if not settings.otp_call_fallback_enabled:
-            raise _delivery_failed(exc) from exc
-        return await _request_call(db, sms, settings, phone, ip, now), "call"
-    return code, "sms"
+    logger.warning(
+        "otp_delivery_result channel=call endpoint=/code/call phone=%s ip=%s status_code=%s call_id=%s",
+        _mask_phone(phone),
+        ip,
+        result.status_code,
+        result.call_id or "-",
+    )
+    return result
 
 
 @router.post("/otp/request", response_model=OtpRequestOut)
@@ -140,24 +154,23 @@ async def request_otp(
 ):
     now = datetime.now(timezone.utc)
     await _lock_phone(db, body.phone)
-    if body.channel != "call":
-        existing = await db.execute(
-            select(OtpCode).where(*_active_code_filter(body.phone, now)).order_by(OtpCode.created_at.desc())
-        )
-        if existing.scalars().first() is not None:
-            raise _too_many("Код уже отправлен, дождитесь окончания срока действия")
     await _ensure_attempts_left(db, settings, body.phone, now)
 
-    fixed_code = _fixed_code(settings, body.phone)
+    # `channel=sms` is accepted for old app builds, but is deliberately
+    # normalized to the only supported production flow: SMS.ru code call.
+    if body.channel == "sms":
+        logger.info("otp_legacy_channel_normalized requested=sms effective=call")
+
+    fixed_code = _fixed_call_code(settings, body.phone)
     if fixed_code is None:
         if await _count_recent(db, body.phone, now) >= settings.otp_requests_per_hour_per_phone:
             raise _too_many("Слишком много запросов кода, попробуйте позже")
-        code, channel = await _deliver_code(db, sms, settings, body.phone, body.channel, _client_ip(request), now)
+        call = await _request_call(db, sms, settings, body.phone, _client_ip(request), now)
+        code, channel = call.code, "call"
     else:
-        code, channel = fixed_code, "sms"
+        code, channel = fixed_code, "call"
 
-    if body.channel == "call":
-        await db.execute(update(OtpCode).where(*_active_code_filter(body.phone, now)).values(consumed_at=now))
+    await db.execute(update(OtpCode).where(*_active_code_filter(body.phone, now)).values(consumed_at=now))
 
     db.add(
         OtpCode(
@@ -195,6 +208,8 @@ async def verify_otp(
     await _ensure_attempts_left(db, settings, body.phone, now)
     if otp.attempts >= _MAX_OTP_ATTEMPTS[otp.channel]:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Слишком много попыток, запросите новый код")
+    if otp.channel == "call" and re.fullmatch(r"[0-9]{4}", body.code) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Ожидается четырехзначный код")
     if not verify_otp_code(body.code, otp.code_hash):
         otp.attempts += 1
         await db.commit()

@@ -67,6 +67,29 @@ All endpoints except `/health`, `/auth/*` and `/media/*` need `Authorization: Be
 - `POST /referral/apply` `{"code": "..."}` — attach the guest to the friend who invited them (once, case-insensitive).
 - `GET /media/{filename}` — public images; `image_url` fields point to `PUBLIC_MEDIA_BASE_URL/<filename>`.
 
+## Purchase history data flow
+
+The mobile app requests `GET /loyalty/history`. The endpoint is user-scoped: it
+returns purchases stored for the authenticated app user, not a global export of
+all customers.
+
+On the first sync for a user, the backend:
+
+1. finds or creates the iiko guest by phone number;
+2. stores the iiko customer ID and card number in `iiko_links`;
+3. requests the guest profile from `/api/1/loyalty/iiko/customer/info`;
+4. requests all-time spend from `/api/1/loyalty/iiko/get_counters`;
+5. requests transactions from `/api/1/loyalty/iiko/customer/transactions/by_date`,
+   in pages of up to 100 records;
+6. groups completed `CloseOrder` transactions by `posOrderId`;
+7. stores the resulting purchases in the `purchases` table.
+
+The initial sync asks iiko for the last 730 days. Later syncs use the latest
+stored purchase with a three-day overlap to avoid gaps. An empty `purchases`
+table is therefore expected for a fresh user, an unlinked guest, a test guest
+without transactions, or a failed/incomplete sync. A separate protected batch
+export would be required to import the history of every iiko customer.
+
 ## Admin panel
 
 Available at `https://app.top1makovka.ru/admin/`. Sections: novelties, promotions and personal offers, bakeries, loyalty tiers, settings, guests (read-only).

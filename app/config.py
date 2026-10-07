@@ -14,9 +14,8 @@ class Settings(BaseSettings):
     refresh_token_ttl_days: int = 30
 
     otp_mock_mode: bool = True
-    otp_dev_code: str = "000000"
+    otp_dev_code: str = "0000"
     otp_ttl_minutes: int = 5
-    otp_call_fallback_enabled: bool = True
     otp_requests_per_hour_per_phone: int = 5
     otp_calls_per_hour_per_phone: int = 3
     otp_calls_per_hour_per_ip: int = 10

@@ -18,13 +18,12 @@ from app.models import OtpCode, User
 from app.rate_limit import SlidingWindowLimiter
 from app.routers import auth as auth_routes
 from app.security import hash_otp_code, verify_otp_code
-from app.sms.client import SmsSendError
+from app.sms.client import SmsCallResult, SmsSendError
 
 PHONE = "+79990000001"
 OTHER_PHONE = "+79990000002"
 REVIEW_PHONE = "+79990000099"
 PUBLIC_IP = "203.0.113.7"
-NO_ROUTE = "На этот номер нет маршрута для доставки сообщений"
 BUSY = "Запрос по этому номеру уже обрабатывается, попробуйте позже"
 OUT_OF_ATTEMPTS = "Слишком много неверных попыток, попробуйте позже"
 CODE_ATTEMPTS_EXHAUSTED = "Слишком много попыток, запросите новый код"
@@ -130,11 +129,9 @@ class OtpSession:
 class FakeSms:
     def __init__(
         self,
-        send_error: Exception | None = None,
         call_error: Exception | None = None,
         gate: asyncio.Event | None = None,
     ):
-        self.send_error = send_error
         self.call_error = call_error
         self.gate = gate
         self.started = asyncio.Event()
@@ -146,18 +143,12 @@ class FakeSms:
         if self.gate is not None:
             await self.gate.wait()
 
-    async def send_otp(self, phone: str, code: str) -> None:
-        self.sent.append((phone, code))
-        await self._hold()
-        if self.send_error is not None:
-            raise self.send_error
-
-    async def call_otp(self, phone: str, ip: str) -> str:
+    async def call_otp(self, phone: str, ip: str) -> SmsCallResult:
         self.calls.append((phone, ip))
         await self._hold()
         if self.call_error is not None:
             raise self.call_error
-        return "1234"
+        return SmsCallResult(code="1234", call_id="test-call", status_code=100)
 
 
 def _code(
@@ -235,8 +226,8 @@ async def _verify(code: str, phone: str = PHONE) -> httpx.Response:
         return await http.post("/auth/otp/verify", json={"phone": phone, "code": code})
 
 
-class TestAutomaticDelivery:
-    async def test_sms_success_returns_six_digit_sms_code(self, otp_env):
+class TestCallDelivery:
+    async def test_default_request_returns_four_digit_call_code(self, otp_env):
         env = otp_env()
         response = await _request({"phone": PHONE})
         assert response.status_code == 200
@@ -244,82 +235,54 @@ class TestAutomaticDelivery:
             "phone": PHONE,
             "expires_in_seconds": 300,
             "dev_code": None,
-            "channel": "sms",
-            "code_length": 6,
+            "channel": "call",
+            "code_length": 4,
         }
-        [(phone, code)] = env.sms.sent
-        assert phone == PHONE and len(code) == 6
-        assert env.sms.calls == []
+        assert env.sms.sent == []
+        assert env.sms.calls == [(PHONE, "-1")]
         [stored] = env.stored()
-        assert stored.channel == "sms"
-        assert verify_otp_code(code, stored.code_hash)
+        assert stored.channel == "call"
+        assert verify_otp_code("1234", stored.code_hash)
 
-    async def test_explicit_sms_channel_behaves_like_auto(self, otp_env):
+    async def test_legacy_sms_channel_is_forced_to_call(self, otp_env):
         env = otp_env()
         response = await _request({"phone": PHONE, "channel": "sms"})
-        assert response.json()["channel"] == "sms"
-        assert len(env.sms.sent) == 1
+        assert response.status_code == 200
+        assert response.json()["channel"] == "call"
+        assert response.json()["code_length"] == 4
+        assert env.sms.sent == []
+        assert len(env.sms.calls) == 1
 
     async def test_unknown_channel_is_rejected(self, otp_env):
         otp_env()
         response = await _request({"phone": PHONE, "channel": "whatsapp"})
         assert response.status_code == 422
 
-    async def test_rejected_sms_falls_back_to_call(self, otp_env):
-        env = otp_env(sms=FakeSms(send_error=SmsSendError(NO_ROUTE, status_code=207)))
-        response = await _request({"phone": PHONE})
-        assert response.status_code == 200
-        body = response.json()
-        assert body["channel"] == "call"
-        assert body["code_length"] == 4
-        assert body["dev_code"] is None
-        assert env.sms.calls == [(PHONE, "-1")]
-        [stored] = env.stored()
-        assert stored.channel == "call"
-        assert verify_otp_code("1234", stored.code_hash)
-        sms_code = env.sms.sent[0][1]
-        assert not verify_otp_code(sms_code, stored.code_hash)
-
-    async def test_fallback_disabled_returns_502(self, otp_env):
-        env = otp_env(
-            sms=FakeSms(send_error=SmsSendError(NO_ROUTE, status_code=207)),
-            otp_call_fallback_enabled=False,
-        )
-        response = await _request({"phone": PHONE})
-        assert response.status_code == 502
-        assert response.json() == {"detail": f"Не удалось отправить код: {NO_ROUTE}"}
-        assert env.sms.calls == []
-        assert env.stored() == []
-
-    async def test_sms_and_call_failure_returns_502(self, otp_env):
-        env = otp_env(
-            sms=FakeSms(
-                send_error=SmsSendError(NO_ROUTE, status_code=207),
-                call_error=SmsSendError("Недостаточно средств", status_code=201),
-            )
-        )
+    async def test_call_failure_returns_502_without_sms_attempt(self, otp_env):
+        env = otp_env(sms=FakeSms(call_error=SmsSendError("Недостаточно средств", status_code=201)))
         response = await _request({"phone": PHONE})
         assert response.status_code == 502
         assert response.json() == {"detail": "Не удалось отправить код: Недостаточно средств"}
         assert len(env.sms.calls) == 1
+        assert env.sms.sent == []
         assert env.stored() == []
 
-    async def test_active_code_blocks_automatic_request(self, otp_env):
+    async def test_active_code_is_replaced_by_a_new_call(self, otp_env):
         env = otp_env(codes=[_code(active=True)])
         response = await _request({"phone": PHONE})
-        assert response.status_code == 429
-        assert response.json()["detail"] == "Код уже отправлен, дождитесь окончания срока действия"
+        assert response.status_code == 200
+        assert response.json()["channel"] == "call"
+        assert len(env.sms.calls) == 1
         assert env.sms.sent == []
 
     async def test_logs_never_contain_codes(self, otp_env, caplog):
-        env = otp_env(
-            sms=FakeSms(send_error=SmsSendError(NO_ROUTE, status_code=207)),
-        )
+        env = otp_env()
         with caplog.at_level(logging.DEBUG):
             response = await _request({"phone": PHONE})
         assert response.status_code == 200
-        assert "status_code=207" in caplog.text
-        assert env.sms.sent[0][1] not in caplog.text
+        assert "endpoint=/code/call" in caplog.text
+        assert "call_id=test-call" in caplog.text
+        assert "status_code=100" in caplog.text
         assert "1234" not in caplog.text
 
 
@@ -380,7 +343,7 @@ class TestRateLimits:
         env = otp_env(codes=codes)
         response = await _request({"phone": PHONE})
         assert response.status_code == 200
-        assert len(env.sms.sent) == 1
+        assert len(env.sms.calls) == 1
 
     async def test_calls_per_phone_per_hour(self, otp_env):
         env = otp_env(codes=[_code(channel="call") for _ in range(3)])
@@ -389,14 +352,11 @@ class TestRateLimits:
         assert response.json()["detail"] == "Слишком много звонков на этот номер, попробуйте позже"
         assert env.sms.calls == []
 
-    async def test_calls_per_phone_limit_fallback(self, otp_env):
-        env = otp_env(
-            codes=[_code(channel="call") for _ in range(3)],
-            sms=FakeSms(send_error=SmsSendError(NO_ROUTE, status_code=207)),
-        )
+    async def test_calls_per_phone_limit_blocks_the_only_flow(self, otp_env):
+        env = otp_env(codes=[_code(channel="call") for _ in range(3)])
         response = await _request({"phone": PHONE})
         assert response.status_code == 429
-        assert len(env.sms.sent) == 1
+        assert len(env.sms.sent) == 0
         assert env.sms.calls == []
 
     async def test_calls_per_ip_per_hour(self, otp_env):
@@ -431,7 +391,7 @@ class TestFixedCodes:
             "phone": REVIEW_PHONE,
             "expires_in_seconds": 300,
             "dev_code": None,
-            "channel": "sms",
+            "channel": "call",
             "code_length": 4,
         }
         assert env.sms.sent == [] and env.sms.calls == []
@@ -455,21 +415,23 @@ class TestFixedCodes:
         assert response.json() == {
             "phone": PHONE,
             "expires_in_seconds": 300,
-            "dev_code": "000000",
-            "channel": "sms",
-            "code_length": 6,
+            "dev_code": "0000",
+            "channel": "call",
+            "code_length": 4,
         }
         assert env.sms.sent == [] and env.sms.calls == []
 
-    async def test_mock_mode_keeps_already_sent_rule(self, otp_env):
-        otp_env(codes=[_code(active=True)], otp_mock_mode=True)
+    async def test_mock_mode_replaces_active_code_with_call(self, otp_env):
+        env = otp_env(codes=[_code(active=True)], otp_mock_mode=True)
         response = await _request({"phone": PHONE})
-        assert response.status_code == 429
+        assert response.status_code == 200
+        assert response.json()["channel"] == "call"
+        assert env.sms.sent == [] and env.sms.calls == []
 
 
 class TestVerifyCallCode:
     async def test_four_digit_call_code_verifies(self, otp_env):
-        env = otp_env(sms=FakeSms(send_error=SmsSendError(NO_ROUTE, status_code=207)))
+        env = otp_env()
         assert (await _request({"phone": PHONE})).json()["channel"] == "call"
         async with _client() as http:
             wrong = await http.post("/auth/otp/verify", json={"phone": PHONE, "code": "4321"})
@@ -480,6 +442,15 @@ class TestVerifyCallCode:
         [stored] = env.stored()
         assert stored.attempts == 1
         assert stored.consumed_at is not None
+
+    async def test_call_code_rejects_non_four_digit_input_without_using_attempt(self, otp_env):
+        env = otp_env()
+        assert (await _request({"phone": PHONE})).status_code == 200
+        invalid = await _verify("12345")
+        assert invalid.status_code == 400
+        assert invalid.json()["detail"] == "Ожидается четырехзначный код"
+        [stored] = env.stored()
+        assert stored.attempts == 0
 
 
 class TestGuessBudget:
@@ -493,13 +464,11 @@ class TestGuessBudget:
         [stored] = env.stored()
         assert stored.attempts == 3 and stored.consumed_at is None
 
-    async def test_sms_code_allows_five_wrong_attempts(self, otp_env):
+    async def test_call_code_allows_only_four_digits(self, otp_env):
         env = otp_env()
         assert (await _request({"phone": PHONE})).status_code == 200
-        code = env.sms.sent[0][1]
-        wrong = str((int(code) + 1) % 1_000_000).zfill(6)
-        assert [(await _verify(wrong)).status_code for _ in range(5)] == [400] * 5
-        blocked = await _verify(code)
+        assert [(await _verify("0000")).status_code for _ in range(3)] == [400] * 3
+        blocked = await _verify("1234")
         assert blocked.status_code == 429
         assert blocked.json()["detail"] == CODE_ATTEMPTS_EXHAUSTED
 
@@ -570,7 +539,7 @@ class TestPerPhoneSerialization:
         assert len(env.stored()) == 1
         assert set(env.store.lock_requests) == {f"otp:{PHONE}"}
 
-    async def test_parallel_auto_requests_send_one_sms(self, otp_env):
+    async def test_parallel_default_requests_make_one_call(self, otp_env):
         gate = asyncio.Event()
         env = otp_env(sms=FakeSms(gate=gate))
         first = asyncio.create_task(_request({"phone": PHONE}))
@@ -581,9 +550,9 @@ class TestPerPhoneSerialization:
         gate.set()
         assert (await first).status_code == 200
         after = await _request({"phone": PHONE})
-        assert after.status_code == 429
-        assert after.json()["detail"] == "Код уже отправлен, дождитесь окончания срока действия"
-        assert len(env.sms.sent) == 1
+        assert after.status_code == 200
+        assert len(env.sms.sent) == 0
+        assert len(env.sms.calls) == 2
 
     async def test_other_phones_are_not_blocked(self, otp_env):
         gate = asyncio.Event()
@@ -617,7 +586,7 @@ class TestPerPhoneSerialization:
 
     async def test_lock_is_released_after_rejection(self, otp_env):
         env = otp_env(codes=[_code(active=True)])
-        assert (await _request({"phone": PHONE})).status_code == 429
+        assert (await _request({"phone": PHONE})).status_code == 200
         assert env.store.locks == set()
         assert (await _request({"phone": PHONE, "channel": "call"})).status_code == 200
 

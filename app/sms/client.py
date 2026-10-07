@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 import httpx
 
@@ -15,6 +16,13 @@ class SmsSendError(Exception):
         self.status_code = status_code
 
 
+@dataclass(frozen=True)
+class SmsCallResult:
+    code: str
+    call_id: str | None
+    status_code: int | None
+
+
 class SmsRuClient:
     _BASE_URL = "https://sms.ru"
 
@@ -25,28 +33,7 @@ class SmsRuClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def send_otp(self, phone: str, code: str) -> None:
-        text = f"Код для входа в приложение Пекарня: {code}"
-        params = {
-            "api_id": self._settings.sms_ru_api_id,
-            "to": phone,
-            "msg": text,
-            "json": 1,
-        }
-        data = await self._get_json("/sms/send", params)
-
-        if data.get("status") != "OK":
-            raise SmsSendError(data.get("status_text", "unknown sms.ru error"), status_code=data.get("status_code"))
-
-        results = data.get("sms") or {}
-        result = results.get(phone) or results.get(phone.lstrip("+")) or {}
-        if result.get("status") != "OK":
-            raise SmsSendError(
-                result.get("status_text", "unknown sms.ru delivery error"),
-                status_code=result.get("status_code"),
-            )
-
-    async def call_otp(self, phone: str, ip: str) -> str:
+    async def call_otp(self, phone: str, ip: str) -> SmsCallResult:
         params = {
             "phone": phone.lstrip("+"),
             "ip": ip,
@@ -60,7 +47,11 @@ class SmsRuClient:
                 status_code=data.get("status_code"),
             )
 
-        return _normalize_call_code(data.get("code"), sorted(data))
+        return SmsCallResult(
+            code=_normalize_call_code(data.get("code"), sorted(data)),
+            call_id=_optional_text(data.get("call_id")),
+            status_code=_optional_int(data.get("status_code")),
+        )
 
     async def _get_json(self, path: str, params: dict) -> dict:
         try:
@@ -88,3 +79,11 @@ def _normalize_call_code(code: object, fields: list[str]) -> str:
             f"sms.ru returned an invalid call code ({type(code).__name__}; fields: {', '.join(fields)})"
         )
     return text.zfill(4)
+
+
+def _optional_text(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
