@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,3 +66,10 @@ async def update_profile(
         background_tasks.add_task(link_user, user.id, iiko)
 
     return await _load_out(user, db, settings)
+
+
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_profile(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await db.delete(user)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

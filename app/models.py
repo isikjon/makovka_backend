@@ -53,8 +53,12 @@ class User(Base):
     referred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    iiko_link: Mapped["IikoLink | None"] = relationship(back_populates="user", uselist=False)
-    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(back_populates="user")
+    iiko_link: Mapped["IikoLink | None"] = relationship(
+        back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class IikoLink(Base):

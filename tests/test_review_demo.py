@@ -43,6 +43,7 @@ class Result:
 class RouteSession:
     def __init__(self):
         self.executed = 0
+        self.deleted = None
 
     async def execute(self, statement):
         self.executed += 1
@@ -50,6 +51,9 @@ class RouteSession:
 
     async def commit(self):
         pass
+
+    async def delete(self, obj):
+        self.deleted = obj
 
 
 class Recorder:
@@ -210,3 +214,9 @@ class TestJobModes:
         assert "users.referred_by_id IS NOT NULL" in sql
         assert "NOT (EXISTS" in sql
         assert "referral_rewards.attempts >=" in sql
+
+
+async def test_delete_profile_removes_account(demo_env, client):
+    response = await client.delete("/profile")
+    assert response.status_code == 204
+    assert demo_env.session.deleted is demo_env.user
